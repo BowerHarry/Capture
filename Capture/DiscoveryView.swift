@@ -14,6 +14,16 @@ struct DiscoveryView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // Search Bar (visible on all tabs)
+                SearchBar(text: $searchQuery)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .onChange(of: searchQuery) { newValue in
+                        Task {
+                            await performSearch(query: newValue)
+                        }
+                    }
+                
                 // Tab Picker
                 Picker("View", selection: $selectedTab) {
                     Text("Trending").tag(0)
@@ -33,42 +43,69 @@ struct DiscoveryView: View {
                     hideKeyboard()
                 }
                 
-                // Search Bar (only for Habits and Users tabs)
-                if selectedTab == 1 || selectedTab == 2 {
-                    SearchBar(text: $searchQuery)
+                // Content with Swipe Navigation
+                TabView(selection: $selectedTab) {
+                    // Wrap in animation for smooth transitions
+                    Group {
+                    // Trending Tab
+                    ScrollView {
+                        LazyVStack(spacing: 24) {
+                            TrendingTabContent(
+                                searchQuery: searchQuery,
+                                onSearchQueryChange: { newQuery in
+                                    searchQuery = newQuery
+                                }
+                            )
+                            
+                            // Bottom spacer for navigation bar
+                            Spacer()
+                                .frame(height: 100)
+                        }
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
-                        .onChange(of: searchQuery) { newValue in
-                            Task {
-                                await performSearch(query: newValue)
-                            }
-                        }
-                }
-                
-                // Content
-                ScrollView {
-                    LazyVStack(spacing: 24) {
-                        if selectedTab == 0 {
-                            // Trending Tab
-                            TrendingTabContent()
-                        } else if selectedTab == 1 {
-                            // Habits Tab
-                            HabitsTabContent(habits: filteredHabits)
-                        } else {
-                            // Users Tab
-                            UsersTabContent(users: filteredUsers, searchQuery: searchQuery)
-                        }
-                        
-                        // Bottom spacer for navigation bar
-                        Spacer()
-                            .frame(height: 100)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
+                    .onTapGesture {
+                        hideKeyboard()
+                    }
+                    .tag(0)
+                    
+                    // Habits Tab
+                    ScrollView {
+                        LazyVStack(spacing: 24) {
+                            HabitsTabContent(habits: filteredHabits)
+                            
+                            // Bottom spacer for navigation bar
+                            Spacer()
+                                .frame(height: 100)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                    }
+                    .onTapGesture {
+                        hideKeyboard()
+                    }
+                    .tag(1)
+                    
+                    // Users Tab
+                    ScrollView {
+                        LazyVStack(spacing: 24) {
+                            UsersTabContent(users: filteredUsers, searchQuery: searchQuery)
+                            
+                            // Bottom spacer for navigation bar
+                            Spacer()
+                                .frame(height: 100)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                    }
+                    .onTapGesture {
+                        hideKeyboard()
+                    }
+                    .tag(2)
+                    }
                 }
-                .onTapGesture {
-                    hideKeyboard()
-                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                .animation(.easeInOut(duration: 0.8), value: selectedTab)
             }
             .background(
                 LinearGradient(
@@ -114,7 +151,10 @@ struct DiscoveryView: View {
     }
     
         private func performSearch(query: String) async {
-        if selectedTab == 1 {
+        if selectedTab == 0 {
+            // Search trending habits - this is handled by the computed property
+            // No additional filtering needed as it's done in the view
+        } else if selectedTab == 1 {
             // Search habits
             if query.isEmpty {
                 filteredHabits = allHabits
@@ -163,12 +203,17 @@ struct DiscoveryView: View {
 
 struct TrendingTabContent: View {
     @EnvironmentObject var habitManager: HabitManager
-    @State private var searchQuery = ""
+    let searchQuery: String
+    let onSearchQueryChange: (String) -> Void
     
     var body: some View {
         LazyVStack(spacing: 24) {
             // Categories
-            CategoriesSection(categories: habitManager.categories, searchQuery: $searchQuery)
+            CategoriesSection(
+                categories: habitManager.categories,
+                searchQuery: .constant(searchQuery),
+                onSearchQueryChange: onSearchQueryChange
+            )
             
             // Trending Habits
             TrendingHabitsSection(
@@ -446,6 +491,13 @@ struct SearchBar: View {
 struct CategoriesSection: View {
     let categories: [DiscoveryHabitCategory]
     @Binding var searchQuery: String
+    let onSearchQueryChange: ((String) -> Void)?
+    
+    init(categories: [DiscoveryHabitCategory], searchQuery: Binding<String>, onSearchQueryChange: ((String) -> Void)? = nil) {
+        self.categories = categories
+        self._searchQuery = searchQuery
+        self.onSearchQueryChange = onSearchQueryChange
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -457,7 +509,12 @@ struct CategoriesSection: View {
                 CategoryBadge(
                     category: category,
                     onTap: {
-                        searchQuery = category.name.lowercased()
+                        let newQuery = category.name.lowercased()
+                        if let onSearchQueryChange = onSearchQueryChange {
+                            onSearchQueryChange(newQuery)
+                        } else {
+                            searchQuery = newQuery
+                        }
                     }
                 )
             }

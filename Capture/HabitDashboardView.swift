@@ -126,14 +126,14 @@ struct HabitDashboardView: View {
                                                     .cornerRadius(8)
                                                 
                                                 // Streak display adjacent to category
-                                                                                                  let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
-                                                  HStack(spacing: 6) {
-                                                      Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 14))
-                                                      Text("\(streakValue)").font(.system(size: 14, weight: .bold)).foregroundColor(.orange)
-                                                  }
-                                                  .padding(.horizontal, 8).padding(.vertical, 4)
-                                                  .background(Color.orange.opacity(0.15))
-                                                  .cornerRadius(8)
+                                                let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
+                                                HStack(spacing: 6) {
+                                                    Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 14))
+                                                    Text("\(streakValue)").font(.system(size: 14, weight: .bold)).foregroundColor(.orange)
+                                                }
+                                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                                .background(Color.orange.opacity(0.15))
+                                                .cornerRadius(8)
                                                 
                                                 Spacer()
                                             }
@@ -179,6 +179,27 @@ struct HabitDashboardView: View {
                                     .padding(.horizontal)
                             }
                         }
+                        .gesture(
+                            DragGesture()
+                                .onEnded { value in
+                                    let threshold: CGFloat = 50
+                                    if value.translation.width > threshold {
+                                        // Swipe right - go to previous tab
+                                        if selectedTab == "grid" {
+                                            withAnimation(.easeInOut(duration: 0.3)) {
+                                                selectedTab = "overview"
+                                            }
+                                        }
+                                    } else if value.translation.width < -threshold {
+                                        // Swipe left - go to next tab
+                                        if selectedTab == "overview" {
+                                            withAnimation(.easeInOut(duration: 0.3)) {
+                                                selectedTab = "grid"
+                                            }
+                                        }
+                                    }
+                                }
+                        )
                     }
                 }
                 .padding(.vertical)
@@ -187,9 +208,15 @@ struct HabitDashboardView: View {
                 if let stored = UserDefaults.standard.value(forKey: "habitsCollapsed") as? Bool {
                     habitsCollapsed = stored
                 }
+                if let stored = UserDefaults.standard.value(forKey: "greetingCollapsed") as? Bool {
+                    greetingCollapsed = stored
+                }
             }
             .onChange(of: habitsCollapsed) { newValue in
                 UserDefaults.standard.set(newValue, forKey: "habitsCollapsed")
+            }
+            .onChange(of: greetingCollapsed) { newValue in
+                UserDefaults.standard.set(newValue, forKey: "greetingCollapsed")
             }
             .task { await habitManager.loadHabits() }
             .onChange(of: authManager.isAuthenticated) { isAuthed in
@@ -329,7 +356,11 @@ private struct GreetingCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Spacer()
-                Button(action: onToggleCollapse) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        onToggleCollapse()
+                    }
+                }) {
                     Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.secondary)
@@ -393,6 +424,27 @@ private struct GreetingCard: View {
                 .stroke(CaptureTheme.Palette.border.opacity(0.3), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 2)
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    let threshold: CGFloat = 30
+                    if value.translation.height < -threshold {
+                        // Swipe up - collapse
+                        if !isCollapsed {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                onToggleCollapse()
+                            }
+                        }
+                    } else if value.translation.height > threshold {
+                        // Swipe down - expand
+                        if isCollapsed {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                onToggleCollapse()
+                            }
+                        }
+                    }
+                }
+        )
     }
     
     private var timeGreeting: String {
