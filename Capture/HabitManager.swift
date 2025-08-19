@@ -10,6 +10,11 @@ class HabitManager: ObservableObject {
     @Published var availableHabits: [AvailableHabit] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    
+    // Discovery properties
+    @Published var popularHabits: [PopularHabit] = []
+    @Published var communityStats = CommunityStats()
+    @Published var categories: [DiscoveryHabitCategory] = []
 
     // Progress and streaks
     struct HabitProgressState {
@@ -69,6 +74,86 @@ class HabitManager: ObservableObject {
         calendar.date(byAdding: .day, value: -180, to: startOfDay(Date())) ?? startOfDay(Date())
     }
 
+    // MARK: - Best Streak Management
+    
+    func updateUserBestStreak() async {
+        guard let currentUser = AuthManager.shared.currentUser else { return }
+        
+        // Calculate the current best streak from all habits
+        let currentBestStreak = calculateCurrentBestStreak()
+        
+        print("📊 Current best streak calculation: \(currentBestStreak)")
+        
+        // Check if this is higher than the user's current best streak
+        if let userBestStreak = currentUser.bestStreak, currentBestStreak <= userBestStreak {
+            print("📊 No update needed - current best streak (\(currentBestStreak)) <= user best streak (\(userBestStreak))")
+            return // No update needed
+        }
+        
+        do {
+            // Update the user's best streak in the database
+            try await supabaseClient.client
+                .from("profiles")
+                .update(["best_streak": currentBestStreak])
+                .eq("id", value: currentUser.id)
+                .execute()
+            
+            print("✅ Updated user best streak to \(currentBestStreak)")
+            
+            // Update the current user object
+            let updatedUser = User(
+                id: currentUser.id,
+                email: currentUser.email,
+                username: currentUser.username,
+                avatar: currentUser.avatar,
+                bio: currentUser.bio,
+                createdAt: currentUser.createdAt,
+                updatedAt: currentUser.updatedAt,
+                followersCount: currentUser.followersCount,
+                followingCount: currentUser.followingCount,
+                bestStreak: currentBestStreak
+            )
+            
+            AuthManager.shared.currentUser = updatedUser
+        } catch {
+            print("❌ Failed to update user best streak: \(error)")
+        }
+    }
+    
+    func calculateCurrentBestStreak() -> Int {
+        // Calculate the best streak from both habit data and current progress
+        let habitBestStreak = habits.map { $0.longestStreak }.max() ?? 0
+        let currentProgressBestStreak = habitProgress.values.map { $0.currentStreak }.max() ?? 0
+        
+        // Take the maximum of habit longest streak and current progress streak
+        let calculatedBestStreak = max(habitBestStreak, currentProgressBestStreak)
+        
+        print("📊 Best streak calculation:")
+        print("   - Habit longest streaks: \(habits.map { $0.longestStreak })")
+        print("   - Current progress streaks: \(habitProgress.values.map { $0.currentStreak })")
+        print("   - Habit best: \(habitBestStreak)")
+        print("   - Progress best: \(currentProgressBestStreak)")
+        print("   - Final best: \(calculatedBestStreak)")
+        
+        return calculatedBestStreak
+    }
+    
+    func getCurrentBestStreak() -> Int {
+        // For the current user, calculate the real-time best streak
+        return calculateCurrentBestStreak()
+    }
+    
+    func getCurrentBestStreakForUser(userId: UUID) -> Int {
+        // For other users, we'll need to calculate based on their habits
+        // This would need to be implemented based on how we fetch other users' data
+        return 0 // Placeholder for now
+    }
+    
+    func forceUpdateBestStreak() async {
+        print("🔄 Force updating best streak...")
+        await updateUserBestStreak()
+    }
+    
     // MARK: - Progress computation
     private func computeStreaksAndCompletion(habits: [Habit], captures: [HabitCapture]) {
         NSLog("[HabitManager] computeStreaksAndCompletion: starting with \(habits.count) habits and \(captures.count) captures")
@@ -167,6 +252,11 @@ class HabitManager: ObservableObject {
         self.habitProgress = progress
         self.totalStreakSum = totalStreak
         self.longestStreakValue = longestStreak
+        
+        // Update user's best streak if needed
+        Task {
+            await updateUserBestStreak()
+        }
         
         NSLog("[HabitManager] computeStreaksAndCompletion: completed - totalStreak: \(totalStreak), longestStreak: \(longestStreak), progress entries: \(progress.count)")
         for (habitId, progressState) in progress {
@@ -356,6 +446,8 @@ class HabitManager: ObservableObject {
             self.captures.append(created)
             // Recompute progress after new capture
             computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            // Immediately update best streak after capture
+            await updateUserBestStreak()
         } catch {
             self.errorMessage = error.localizedDescription
         }
@@ -417,6 +509,162 @@ class HabitManager: ObservableObject {
         } catch {
             self.errorMessage = error.localizedDescription
             return nil
+        }
+    }
+    
+    // MARK: - Discovery Methods
+    
+    func loadPopularHabits() async {
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        
+        do {
+            // Initialize categories
+            let initialCategories = [
+                DiscoveryHabitCategory(name: "Fitness", color: "blue"),
+                DiscoveryHabitCategory(name: "Wellness", color: "green"),
+                DiscoveryHabitCategory(name: "Learning", color: "purple"),
+                DiscoveryHabitCategory(name: "Nutrition", color: "orange"),
+                DiscoveryHabitCategory(name: "Productivity", color: "red"),
+                DiscoveryHabitCategory(name: "Health", color: "pink"),
+                DiscoveryHabitCategory(name: "Social", color: "yellow")
+            ]
+            
+            // For now, we'll create mock data since we don't have the API endpoint yet
+            // In a real implementation, this would call the API
+            let mockPopularHabits = [
+                PopularHabit(
+                    name: "Morning Workout",
+                    category: "Fitness",
+                    participants: 1250,
+                    totalStreak: 8750,
+                    description: "Start your day with energy and build strength",
+                    image: nil,
+                    captures: ["https://picsum.photos/200/200?random=1", "https://picsum.photos/200/200?random=2"]
+                ),
+                PopularHabit(
+                    name: "Daily Meditation",
+                    category: "Wellness",
+                    participants: 890,
+                    totalStreak: 6230,
+                    description: "Find inner peace and reduce stress",
+                    image: nil,
+                    captures: ["https://picsum.photos/200/200?random=3"]
+                ),
+                PopularHabit(
+                    name: "Read 30 Minutes",
+                    category: "Learning",
+                    participants: 2100,
+                    totalStreak: 14700,
+                    description: "Expand your knowledge and vocabulary",
+                    image: nil,
+                    captures: ["https://picsum.photos/200/200?random=4", "https://picsum.photos/200/200?random=5", "https://picsum.photos/200/200?random=6"]
+                ),
+                PopularHabit(
+                    name: "Drink 8 Glasses of Water",
+                    category: "Health",
+                    participants: 3400,
+                    totalStreak: 23800,
+                    description: "Stay hydrated and maintain good health",
+                    image: nil,
+                    captures: ["https://picsum.photos/200/200?random=7", "https://picsum.photos/200/200?random=8"]
+                ),
+                PopularHabit(
+                    name: "No Phone Before Bed",
+                    category: "Wellness",
+                    participants: 1560,
+                    totalStreak: 10920,
+                    description: "Improve sleep quality and reduce blue light exposure",
+                    image: nil,
+                    captures: ["https://picsum.photos/200/200?random=9"]
+                )
+            ]
+            
+            let mockCommunityStats = CommunityStats(
+                activeUsers: 15420,
+                totalHabits: 8920,
+                totalCaptures: 45670
+            )
+            
+            self.popularHabits = mockPopularHabits
+            self.communityStats = mockCommunityStats
+            
+            // Update categories with counts
+            let updatedCategories = initialCategories.map { category in
+                let count = mockPopularHabits
+                    .filter { $0.category == category.name }
+                    .reduce(0) { $0 + $1.participants }
+                return DiscoveryHabitCategory(name: category.name, count: count, color: category.color)
+            }
+            self.categories = updatedCategories
+            
+        } catch {
+            self.errorMessage = error.localizedDescription
+            self.popularHabits = []
+            self.communityStats = CommunityStats()
+            self.categories = []
+        }
+    }
+    
+    func createHabitFromDiscovery(name: String, category: String) async {
+        do {
+            let habit = try await supabaseClient.createHabitDirect(
+                name: name,
+                description: nil,
+                category: category,
+                targetFrequency: "daily",
+                targetCount: 1
+            )
+            self.habits.append(habit)
+            await loadHabits()
+        } catch {
+            self.errorMessage = error.localizedDescription
+        }
+    }
+    
+    func getAllHabits() async -> [AvailableHabit] {
+        do {
+            let response: [AvailableHabit] = try await supabaseClient.client
+                .from("available_habits")
+                .select()
+                .order("name", ascending: true)
+                .limit(1000)
+                .execute()
+                .value
+            
+            return response
+        } catch {
+            self.errorMessage = error.localizedDescription
+            return []
+        }
+    }
+    
+    func getAllUsers() async -> [User] {
+        do {
+            let response: [UserProfile] = try await supabaseClient.client
+                .from("profiles")
+                .select()
+                .order("display_name", ascending: true)
+                .limit(1000)
+                .execute()
+                .value
+            
+            // Convert UserProfile to User
+            return response.map { profile in
+                User(
+                    id: profile.id,
+                    email: profile.email,
+                    username: profile.username ?? profile.displayName ?? "Unknown User",
+                    avatar: profile.avatarUrl,
+                    bio: profile.bio,
+                    createdAt: profile.createdAt,
+                    updatedAt: profile.updatedAt
+                )
+            }
+        } catch {
+            self.errorMessage = error.localizedDescription
+            return []
         }
     }
 }

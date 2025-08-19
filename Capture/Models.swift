@@ -52,7 +52,7 @@ struct Habit: Identifiable, Codable, Hashable {
         self.userId = userId
     }
     
-    // Custom decoding to handle missing 'target' field
+    // Custom decoding to handle missing 'target' field and string UUIDs
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
@@ -68,7 +68,13 @@ struct Habit: Identifiable, Codable, Hashable {
         isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        userId = try container.decode(UUID.self, forKey: .userId)
+        
+        // Handle userId as string and convert to UUID
+        let userIdString = try container.decode(String.self, forKey: .userId)
+        guard let userIdUUID = UUID(uuidString: userIdString) else {
+            throw DecodingError.dataCorruptedError(forKey: .userId, in: container, debugDescription: "Invalid UUID string: \(userIdString)")
+        }
+        userId = userIdUUID
         
         // Use targetCount if available, otherwise default to 1
         target = targetCount ?? 1
@@ -102,6 +108,16 @@ struct Capture: Identifiable, Codable {
     let createdAt: Date
     let updatedAt: Date
     
+    enum CodingKeys: String, CodingKey {
+        case id
+        case habitId = "habit_id"
+        case userId = "user_id"
+        case imageUrl = "image_url"
+        case note
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
     init(id: UUID = UUID(), habitId: UUID, userId: UUID, imageUrl: String? = nil, note: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.habitId = habitId
@@ -118,30 +134,39 @@ struct Capture: Identifiable, Codable {
 struct User: Identifiable, Codable {
     let id: UUID
     let email: String
-    let name: String
+    let username: String
     let avatar: String?
     let bio: String?
     let createdAt: Date
     let updatedAt: Date
+    let followersCount: Int?
+    let followingCount: Int?
+    let bestStreak: Int?
     
     enum CodingKeys: String, CodingKey {
         case id
         case email
-        case name
+        case username
         case avatar
         case bio
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case followersCount = "followers_count"
+        case followingCount = "following_count"
+        case bestStreak = "best_streak"
     }
     
-    init(id: UUID, email: String, name: String, avatar: String? = nil, bio: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    init(id: UUID, email: String, username: String, avatar: String? = nil, bio: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), followersCount: Int? = nil, followingCount: Int? = nil, bestStreak: Int? = nil) {
         self.id = id
         self.email = email
-        self.name = name
+        self.username = username
         self.avatar = avatar
         self.bio = bio
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.followersCount = followersCount
+        self.followingCount = followingCount
+        self.bestStreak = bestStreak
     }
 }
 
@@ -149,17 +174,28 @@ struct UserProfile: Identifiable, Codable {
     let id: UUID
     let email: String
     let username: String?
-    let fullName: String?
+    let displayName: String?
     let avatarUrl: String?
     let bio: String?
     let createdAt: Date
     let updatedAt: Date
     
-    init(id: UUID = UUID(), email: String, username: String? = nil, fullName: String? = nil, avatarUrl: String? = nil, bio: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case email
+        case username
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case bio
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
+    init(id: UUID = UUID(), email: String, username: String? = nil, displayName: String? = nil, avatarUrl: String? = nil, bio: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.email = email
         self.username = username
-        self.fullName = fullName
+        self.displayName = displayName
         self.avatarUrl = avatarUrl
         self.bio = bio
         self.createdAt = createdAt
@@ -234,6 +270,13 @@ struct Follow: Identifiable, Codable {
     let followerId: UUID
     let followingId: UUID
     let createdAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case followerId = "follower_id"
+        case followingId = "following_id"
+        case createdAt = "created_at"
+    }
     
     init(id: UUID = UUID(), followerId: UUID, followingId: UUID, createdAt: Date = Date()) {
         self.id = id
@@ -403,5 +446,54 @@ struct SocialFeedItem: Identifiable {
         self.capture = capture
         self.isLiked = isLiked
         self.isFollowing = isFollowing
+    }
+}
+
+// MARK: - Discovery Models
+
+struct PopularHabit: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let category: String
+    let participants: Int
+    let totalStreak: Int
+    let description: String
+    let image: String?
+    let captures: [String]? // Array of photo URLs from users
+    
+    init(id: UUID = UUID(), name: String, category: String, participants: Int, totalStreak: Int, description: String, image: String? = nil, captures: [String]? = nil) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.participants = participants
+        self.totalStreak = totalStreak
+        self.description = description
+        self.image = image
+        self.captures = captures
+    }
+}
+
+struct CommunityStats: Codable {
+    let activeUsers: Int
+    let totalHabits: Int
+    let totalCaptures: Int
+    
+    init(activeUsers: Int = 0, totalHabits: Int = 0, totalCaptures: Int = 0) {
+        self.activeUsers = activeUsers
+        self.totalHabits = totalHabits
+        self.totalCaptures = totalCaptures
+    }
+}
+
+struct DiscoveryHabitCategory: Identifiable {
+    let id = UUID()
+    let name: String
+    let count: Int
+    let color: String
+    
+    init(name: String, count: Int = 0, color: String) {
+        self.name = name
+        self.count = count
+        self.color = color
     }
 }

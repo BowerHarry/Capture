@@ -1,365 +1,288 @@
 import SwiftUI
 
 struct DiscoveryView: View {
-    @EnvironmentObject var socialManager: SocialManager
     @EnvironmentObject var habitManager: HabitManager
-    @State private var selectedTab = 0
-    @State private var searchText = ""
-    @State private var showingSearch = false
-    @State private var searchResults: [User] = []
-    @State private var isSearching = false
+    @EnvironmentObject var authManager: AuthManager
+    @State private var searchQuery = ""
+    @State private var isLoading = false
+    @State private var selectedTab = 0 // 0: Trending, 1: Habits, 2: Users
+    @State private var allHabits: [AvailableHabit] = []
+    @State private var allUsers: [User] = []
+    @State private var filteredHabits: [AvailableHabit] = []
+    @State private var filteredUsers: [User] = []
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Discovery")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        
-                        Spacer()
-                        
-                        Button(action: { showingSearch = true }) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.title2)
-                                .foregroundColor(.primary)
-                        }
-                    }
-                    
-                    // Tab Picker
-                    Picker("Discovery Tab", selection: $selectedTab) {
-                        Text("Trending").tag(0)
-                        Text("People").tag(1)
-                        Text("Habits").tag(2)
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
+                // Tab Picker
+                Picker("View", selection: $selectedTab) {
+                    Text("Trending").tag(0)
+                    Text("Habits").tag(1)
+                    Text("Users").tag(2)
                 }
-                .padding(.horizontal)
-                .padding(.top)
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .onChange(of: selectedTab) { newValue in
+                    searchQuery = ""
+                    // Clear filtered users when switching to Users tab
+                    if newValue == 2 {
+                        filteredUsers = []
+                    }
+                    // Hide keyboard when switching tabs
+                    hideKeyboard()
+                }
                 
-                // Content
-                TabView(selection: $selectedTab) {
-                    TrendingView()
-                        .tag(0)
-                    
-                    PeopleView()
-                        .tag(1)
-                    
-                    HabitInspirationView()
-                        .tag(2)
-                }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-            }
-            .navigationBarHidden(true)
-            .task {
-                await socialManager.loadPosts()
-            }
-            .sheet(isPresented: $showingSearch) {
-                SearchView(searchText: $searchText, searchResults: $searchResults, isSearching: $isSearching)
-            }
-        }
-    }
-}
-
-// MARK: - Trending View
-
-struct TrendingView: View {
-    @EnvironmentObject var socialManager: SocialManager
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if socialManager.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if socialManager.feedItems.isEmpty {
-                    EmptyStateView(
-                        icon: "flame",
-                        title: "No trending posts yet",
-                        subtitle: "Be the first to share your habit journey!"
-                    )
-                } else {
-                    ForEach(socialManager.feedItems) { item in
-                        DiscoverySocialPostCard(item: item)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-        }
-        .refreshable {
-            await socialManager.getTrendingPosts()
-        }
-    }
-}
-
-// MARK: - People View
-
-struct PeopleView: View {
-    @EnvironmentObject var socialManager: SocialManager
-    @State private var suggestedUsers: [User] = []
-    @State private var isLoading = false
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if suggestedUsers.isEmpty {
-                    EmptyStateView(
-                        icon: "person.2",
-                        title: "No people to discover",
-                        subtitle: "Check back later for new connections!"
-                    )
-                } else {
-                    ForEach(suggestedUsers) { user in
-                        UserCard(user: user)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-        }
-        .task {
-            await loadSuggestedUsers()
-        }
-    }
-    
-    private func loadSuggestedUsers() async {
-        isLoading = true
-        // In a real app, this would load users based on mutual connections, interests, etc.
-        suggestedUsers = []
-        isLoading = false
-    }
-}
-
-// MARK: - Habit Inspiration View
-
-struct HabitInspirationView: View {
-    @EnvironmentObject var habitManager: HabitManager
-    @State private var selectedCategory: HabitCategory? = nil
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 20) {
-                // Category Filter
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        CategoryChip(title: "All", isSelected: selectedCategory == nil) {
-                            selectedCategory = nil
-                        }
-                        
-                        ForEach(HabitCategory.allCases, id: \.self) { category in
-                            CategoryChip(
-                                title: category.rawValue,
-                                icon: category.icon,
-                                isSelected: selectedCategory == category
-                            ) {
-                                selectedCategory = category
+                // Search Bar (only for Habits and Users tabs)
+                if selectedTab == 1 || selectedTab == 2 {
+                    SearchBar(text: $searchQuery)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .onChange(of: searchQuery) { newValue in
+                            Task {
+                                await performSearch(query: newValue)
                             }
                         }
-                    }
-                    .padding(.horizontal)
                 }
                 
-                // Habit Grid
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible())
-                ], spacing: 16) {
-                    ForEach(filteredHabits) { habit in
-                        HabitInspirationCard(habit: habit)
+                // Content
+                ScrollView {
+                    LazyVStack(spacing: 24) {
+                        if selectedTab == 0 {
+                            // Trending Tab
+                            TrendingTabContent()
+                        } else if selectedTab == 1 {
+                            // Habits Tab
+                            HabitsTabContent(habits: filteredHabits)
+                        } else {
+                            // Users Tab
+                            UsersTabContent(users: filteredUsers, searchQuery: searchQuery)
+                        }
+                        
+                        // Bottom spacer for navigation bar
+                        Spacer()
+                            .frame(height: 100)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
                 }
-                .padding(.horizontal)
+                .onTapGesture {
+                    hideKeyboard()
+                }
             }
-            .padding(.top, 16)
+            .background(
+                LinearGradient(
+                    colors: [Color(.systemBackground), Color(.systemBackground), Color.accentColor.opacity(0.1)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .navigationBarHidden(true)
+            .task {
+                await loadInitialData()
+            }
+            .onAppear {
+                Task {
+                    await loadInitialData()
+                }
+            }
+            .refreshable {
+                await loadInitialData()
+            }
         }
     }
     
-    private var filteredHabits: [AvailableHabit] {
-        if let category = selectedCategory {
-            return habitManager.availableHabits.filter { $0.category == category.rawValue }
+
+    
+    private func loadInitialData() async {
+        await habitManager.loadPopularHabits()
+        await loadAllHabits()
+        await loadAllUsers()
+    }
+    
+    private func loadAllHabits() async {
+        // This will be implemented with Supabase query
+        allHabits = await habitManager.getAllHabits()
+        filteredHabits = allHabits
+    }
+    
+    private func loadAllUsers() async {
+        // This will be implemented with Supabase query
+        allUsers = await habitManager.getAllUsers()
+        // Don't populate filteredUsers initially - only show results when user searches
+        filteredUsers = []
+    }
+    
+        private func performSearch(query: String) async {
+        if selectedTab == 1 {
+            // Search habits
+            if query.isEmpty {
+                filteredHabits = allHabits
+            } else {
+                filteredHabits = allHabits.filter { habit in
+                    habit.name.localizedCaseInsensitiveContains(query) ||
+                    habit.category.localizedCaseInsensitiveContains(query) ||
+                    (habit.description?.localizedCaseInsensitiveContains(query) ?? false)
+                }
+            }
+        } else if selectedTab == 2 {
+            // Search users - only show results if query has at least 3 characters
+            if query.count < 3 {
+                filteredUsers = []
+            } else {
+                // Filter out the current user from search results
+                let currentUserId = authManager.currentUser?.id
+                filteredUsers = allUsers.filter { user in
+                    // Exclude current user
+                    user.id != currentUserId &&
+                    // Include users that match the search query
+                    (user.username.localizedCaseInsensitiveContains(query) ||
+                     (user.bio?.localizedCaseInsensitiveContains(query) ?? false))
+                }
+            }
+        }
+    }
+    
+    private var trendingFilteredHabits: [PopularHabit] {
+        if searchQuery.isEmpty {
+            return habitManager.popularHabits
         } else {
-            return habitManager.availableHabits
+            return habitManager.popularHabits.filter { habit in
+                habit.name.localizedCaseInsensitiveContains(searchQuery) ||
+                habit.category.localizedCaseInsensitiveContains(searchQuery)
+            }
+        }
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
+// MARK: - Tab Content Views
+
+struct TrendingTabContent: View {
+    @EnvironmentObject var habitManager: HabitManager
+    @State private var searchQuery = ""
+    
+    var body: some View {
+        LazyVStack(spacing: 24) {
+            // Categories
+            CategoriesSection(categories: habitManager.categories, searchQuery: $searchQuery)
+            
+            // Trending Habits
+            TrendingHabitsSection(
+                habits: filteredHabits,
+                searchQuery: searchQuery,
+                onCaptureHabit: { habit in
+                    Task {
+                        await habitManager.createHabitFromDiscovery(name: habit.name, category: habit.category)
+                    }
+                }
+            )
+            
+            // Community Stats
+            if !habitManager.popularHabits.isEmpty {
+                CommunityStatsCard(stats: habitManager.communityStats)
+            }
+        }
+    }
+    
+    private var filteredHabits: [PopularHabit] {
+        if searchQuery.isEmpty {
+            return habitManager.popularHabits
+        } else {
+            return habitManager.popularHabits.filter { habit in
+                habit.name.localizedCaseInsensitiveContains(searchQuery) ||
+                habit.category.localizedCaseInsensitiveContains(searchQuery)
+            }
         }
     }
 }
 
-// MARK: - Supporting Views
-
-private struct DiscoverySocialPostCard: View {
-    let item: SocialFeedItem
-    @EnvironmentObject var socialManager: SocialManager
+struct HabitsTabContent: View {
+    let habits: [AvailableHabit]
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // User Header
-            HStack {
-                AsyncImage(url: URL(string: item.user.avatar ?? "")) { image in
-                    image.resizable()
-                } placeholder: {
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.user.name)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    
-                    Text(timeAgoString(from: item.post.createdAt))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                Button(action: {
-                    Task {
-                        await socialManager.toggleFollow(userId: item.user.id)
-                    }
-                }) {
-                    Text(item.isFollowing ? "Following" : "Follow")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(item.isFollowing ? Color.gray.opacity(0.2) : Color.blue)
-                        .foregroundColor(item.isFollowing ? .primary : .white)
-                        .cornerRadius(16)
+        LazyVStack(spacing: 16) {
+            if habits.isEmpty {
+                DiscoveryEmptyStateCard(searchQuery: "")
+            } else {
+                ForEach(habits) { habit in
+                    HabitListItem(habit: habit)
                 }
             }
-            
-            // Content
-            Text(item.post.content)
-                .font(.body)
-                .multilineTextAlignment(.leading)
-            
-            // Habit/Capture Info
-            if let habit = item.habit {
-                HStack {
-                    Text(habit.icon ?? "⭐️")
-                        .font(.title2)
-                        .frame(width: 32, height: 32)
-                        .background(habitColor(for: habit.color))
-                        .clipShape(Circle())
+        }
+    }
+}
+
+struct UsersTabContent: View {
+    let users: [User]
+    let searchQuery: String
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            if users.isEmpty {
+                VStack(spacing: 16) {
+                    Text("👥")
+                        .font(.system(size: 48))
                     
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(habit.name)
-                            .font(.subheadline)
+                    VStack(spacing: 8) {
+                        Text("Find Friends")
+                            .font(.headline)
                             .fontWeight(.medium)
-                        Text(habit.category)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        
+                        if searchQuery.count < 3 {
+                            Text("Type at least 3 characters to search for users")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        } else {
+                            Text("No users found matching your search")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
                     }
-                    
-                    Spacer()
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(8)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+            } else {
+                ForEach(users) { user in
+                    UserListItem(user: user)
+                }
             }
-            
-            // Image
-            if let imageUrl = item.post.imageUrl {
-                AsyncImage(url: URL(string: imageUrl)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                }
-                .frame(height: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-            
-            // Actions
-            HStack(spacing: 20) {
-                Button(action: {
-                    Task {
-                        await socialManager.toggleLike(postId: item.post.id)
-                    }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: item.isLiked ? "heart.fill" : "heart")
-                            .foregroundColor(item.isLiked ? .red : .primary)
-                        Text("\(item.post.likes)")
-                            .font(.caption)
-                    }
-                }
-                
-                Button(action: {}) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "message")
-                        Text("\(item.post.comments)")
-                            .font(.caption)
-                    }
-                }
-                
-                Spacer()
-            }
-            .foregroundColor(.primary)
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-    }
-    
-    private func habitColor(for colorName: String?) -> Color {
-        switch colorName?.lowercased() {
-        case "red": return .red
-        case "orange": return .orange
-        case "blue": return .blue
-        case "green": return .green
-        case "purple": return .purple
-        case "pink": return .pink
-        case "cyan": return .cyan
-        case "gray": return .gray
-        default: return .blue
-        }
-    }
-    
-    private func timeAgoString(from date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
-struct UserCard: View {
-    let user: User
-    @EnvironmentObject var socialManager: SocialManager
-    @State private var isFollowing = false
+// MARK: - List Item Views
+
+struct HabitListItem: View {
+    let habit: AvailableHabit
     
     var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: user.avatar ?? "")) { image in
-                image.resizable()
-            } placeholder: {
-                Circle()
-                    .fill(Color.gray.opacity(0.3))
-            }
-            .frame(width: 50, height: 50)
-            .clipShape(Circle())
+        HStack(spacing: 16) {
+            Text(habit.icon ?? "⭐️")
+                .font(.title2)
+                .frame(width: 48, height: 48)
+                .background(habitColor(for: habit.color))
+                .clipShape(Circle())
             
             VStack(alignment: .leading, spacing: 4) {
-                Text(user.name)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                Text(habit.name)
+                    .font(.headline)
+                    .fontWeight(.medium)
                 
-                if let bio = user.bio {
-                    Text(bio)
+                Text(habit.category)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                if let description = habit.description {
+                    Text(description)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(2)
@@ -367,64 +290,10 @@ struct UserCard: View {
             }
             
             Spacer()
-            
-            Button(action: {
-                Task {
-                    await socialManager.toggleFollow(userId: user.id)
-                    isFollowing.toggle()
-                }
-            }) {
-                Text(isFollowing ? "Following" : "Follow")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(isFollowing ? Color.gray.opacity(0.2) : Color.blue)
-                    .foregroundColor(isFollowing ? .primary : .white)
-                    .cornerRadius(20)
-            }
         }
-        .padding()
+        .padding(16)
         .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-    }
-}
-
-struct HabitInspirationCard: View {
-    let habit: AvailableHabit
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            Text(habit.icon ?? "⭐️")
-                .font(.system(size: 32))
-                .frame(width: 60, height: 60)
-                .background(habitColor(for: habit.color))
-                .clipShape(Circle())
-            
-            VStack(spacing: 4) {
-                Text(habit.name)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .multilineTextAlignment(.center)
-                
-                Text(habit.category)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            if let description = habit.description {
-                Text(description)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity)
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
     }
     
@@ -443,37 +312,493 @@ struct HabitInspirationCard: View {
     }
 }
 
-struct CategoryChip: View {
-    let title: String
-    let icon: String?
-    let isSelected: Bool
-    let action: () -> Void
-    
-    init(title: String, icon: String? = nil, isSelected: Bool, action: @escaping () -> Void) {
-        self.title = title
-        self.icon = icon
-        self.isSelected = isSelected
-        self.action = action
-    }
+struct UserListItem: View {
+    let user: User
+    @EnvironmentObject var socialManager: SocialManager
+    @State private var isFollowing = false
+    @State private var isLoading = false
+    @State private var showingUserProfile = false
     
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon = icon {
-                    Text(icon)
+        HStack(spacing: 16) {
+            // User info section (clickable)
+            Button(action: {
+                showingUserProfile = true
+            }) {
+                HStack(spacing: 16) {
+                    AsyncImage(url: URL(string: user.avatar ?? "")) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.gray)
+                            )
+                    }
+                    .frame(width: 48, height: 48)
+                    .clipShape(Circle())
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(user.username)
+                            .font(.headline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.primary)
+                        
+                        if let bio = user.bio {
+                            Text(bio)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(.medium)
             }
+            .buttonStyle(PlainButtonStyle())
+            
+            // Follow button
+            Button(action: {
+                Task {
+                    isLoading = true
+                    await socialManager.toggleFollow(userId: user.id)
+                    // Update the local state based on the actual database state
+                    isFollowing = await socialManager.isFollowing(userId: user.id)
+                    isLoading = false
+                }
+            }) {
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                } else {
+                    Text(isFollowing ? "Following" : "Follow")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+            }
+            .font(.caption)
+            .fontWeight(.medium)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(isSelected ? Color.blue : Color.gray.opacity(0.2))
-            .foregroundColor(isSelected ? .white : .primary)
+            .background(isFollowing ? Color.gray : Color.blue)
+            .foregroundColor(.white)
             .cornerRadius(16)
+            .disabled(isLoading)
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+        .task {
+            isFollowing = await socialManager.isFollowing(userId: user.id)
+        }
+        .onAppear {
+            Task {
+                isFollowing = await socialManager.isFollowing(userId: user.id)
+            }
+        }
+        .sheet(isPresented: $showingUserProfile) {
+            UserProfileView(user: user)
+                .environmentObject(HabitManager.shared)
+                .environmentObject(SocialManager.shared)
+                .environmentObject(AuthManager.shared)
         }
     }
 }
+
+// MARK: - Search Bar
+
+struct SearchBar: View {
+    @Binding var text: String
+    @FocusState private var isFocused: Bool
+    
+    var body: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+                .font(.system(size: 16))
+            
+            TextField("Search...", text: $text)
+                .textFieldStyle(PlainTextFieldStyle())
+                .focused($isFocused)
+                .onSubmit {
+                    isFocused = false
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(.systemGray6))
+        .cornerRadius(8)
+    }
+}
+
+// MARK: - Categories Section
+
+struct CategoriesSection: View {
+    let categories: [DiscoveryHabitCategory]
+    @Binding var searchQuery: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Popular Categories")
+                .font(.title2)
+                .fontWeight(.medium)
+            
+            CategoryFlowLayout(categories: categories) { category in
+                CategoryBadge(
+                    category: category,
+                    onTap: {
+                        searchQuery = category.name.lowercased()
+                    }
+                )
+            }
+        }
+    }
+}
+
+struct CategoryBadge: View {
+    let category: DiscoveryHabitCategory
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            Text(category.name)
+                .font(.caption)
+                .fontWeight(.medium)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(height: 32)
+                .background(categoryColor(for: category.color))
+                .foregroundColor(categoryTextColor(for: category.color))
+                .cornerRadius(8)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+    
+    private func categoryColor(for colorName: String) -> Color {
+        switch colorName.lowercased() {
+        case "blue": return Color.blue.opacity(0.1)
+        case "green": return Color.green.opacity(0.1)
+        case "purple": return Color.purple.opacity(0.1)
+        case "orange": return Color.orange.opacity(0.1)
+        case "red": return Color.red.opacity(0.1)
+        case "pink": return Color.pink.opacity(0.1)
+        case "yellow": return Color.yellow.opacity(0.1)
+        default: return Color.gray.opacity(0.1)
+        }
+    }
+    
+    private func categoryTextColor(for colorName: String) -> Color {
+        switch colorName.lowercased() {
+        case "blue": return .blue
+        case "green": return .green
+        case "purple": return .purple
+        case "orange": return .orange
+        case "red": return .red
+        case "pink": return .pink
+        case "yellow": return .orange
+        default: return .primary
+        }
+    }
+}
+
+// MARK: - Trending Habits Section
+
+struct TrendingHabitsSection: View {
+    let habits: [PopularHabit]
+    let searchQuery: String
+    let onCaptureHabit: (PopularHabit) -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(sectionTitle)
+                .font(.title2)
+                .fontWeight(.medium)
+            
+            if habits.isEmpty {
+                DiscoveryEmptyStateCard(searchQuery: searchQuery)
+            } else {
+                LazyVStack(spacing: 16) {
+                    ForEach(habits) { habit in
+                        DiscoveryHabitCard(
+                            habit: habit,
+                            onCapture: {
+                                onCaptureHabit(habit)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    private var sectionTitle: String {
+        if searchQuery.isEmpty {
+            return "Trending Habits"
+        } else {
+            return "Search Results for \"\(searchQuery)\""
+        }
+    }
+}
+
+struct DiscoveryHabitCard: View {
+    let habit: PopularHabit
+    let onCapture: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 16) {
+                // Photo Grid
+                HabitPhotoGrid(captures: habit.captures ?? [], habitName: habit.name)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(habit.name)
+                                .font(.headline)
+                                .fontWeight(.medium)
+                            
+                            Text(habit.category)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .frame(height: 24)
+                                .background(Color.blue.opacity(0.1))
+                                .foregroundColor(.blue)
+                                .cornerRadius(6)
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: onCapture) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "camera")
+                                    .font(.system(size: 12))
+                                Text("Capture")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.clear)
+                            .foregroundColor(.black)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.black, lineWidth: 1)
+                            )
+                        }
+                    }
+                    
+                    Text(habit.description)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                    
+                    HStack(spacing: 16) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.2")
+                                .font(.system(size: 14))
+                            Text("\(habit.participants) participant\(habit.participants == 1 ? "" : "s")")
+                                .font(.caption)
+                        }
+                        
+                        if habit.totalStreak > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chart.line.uptrend.xyaxis")
+                                    .font(.system(size: 14))
+                                Text("\(Int(round(Double(habit.totalStreak) / Double(habit.participants)))) avg streak")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+    }
+}
+
+struct HabitPhotoGrid: View {
+    let captures: [String]
+    let habitName: String
+    
+    var body: some View {
+        let photosToShow = captures.count >= 4 ? Array(captures.prefix(4)) : (captures.isEmpty ? [] : Array(captures.prefix(1)))
+        
+        if photosToShow.isEmpty {
+            // Placeholder
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.gray.opacity(0.1), Color.gray.opacity(0.2)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 64, height: 64)
+                .overlay(
+                    Text("📸")
+                        .font(.title2)
+                )
+        } else if photosToShow.count == 1 {
+            // Single photo
+            AsyncImage(url: URL(string: photosToShow[0])) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.gray.opacity(0.3)
+            }
+            .frame(width: 64, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            // 2x2 grid
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 1),
+                GridItem(.flexible(), spacing: 1)
+            ], spacing: 1) {
+                ForEach(photosToShow, id: \.self) { photoUrl in
+                    AsyncImage(url: URL(string: photoUrl)) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Color.gray.opacity(0.3)
+                    }
+                    .frame(width: 31, height: 31)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+            .frame(width: 64, height: 64)
+            .background(Color.gray.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+}
+
+struct DiscoveryEmptyStateCard: View {
+    let searchQuery: String
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("🔍")
+                .font(.system(size: 48))
+            
+            VStack(spacing: 8) {
+                Text(emptyStateTitle)
+                    .font(.headline)
+                    .fontWeight(.medium)
+                
+                Text(emptyStateSubtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+    }
+    
+    private var emptyStateTitle: String {
+        if searchQuery.isEmpty {
+            return "No popular habits yet"
+        } else {
+            return "No habits found"
+        }
+    }
+    
+    private var emptyStateSubtitle: String {
+        if searchQuery.isEmpty {
+            return "Be the first to start tracking habits and inspire others!"
+        } else {
+            return "Try searching for something else or create a new habit!"
+        }
+    }
+}
+
+// MARK: - Community Stats Card
+
+struct CommunityStatsCard: View {
+    let stats: CommunityStats
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Community Stats")
+                .font(.headline)
+                .fontWeight(.medium)
+            
+            HStack(spacing: 0) {
+                StatItem(
+                    value: stats.activeUsers,
+                    label: "Active Users"
+                )
+                
+                Divider()
+                    .frame(height: 40)
+                
+                StatItem(
+                    value: stats.totalHabits,
+                    label: "Habits"
+                )
+                
+                Divider()
+                    .frame(height: 40)
+                
+                StatItem(
+                    value: stats.totalCaptures,
+                    label: "Captures"
+                )
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+    }
+}
+
+struct StatItem: View {
+    let value: Int
+    let label: String
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("\(value.formatted())")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.accentColor)
+            
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+#Preview {
+    DiscoveryView()
+        .environmentObject(HabitManager.shared)
+}
+
+// MARK: - Shared Components
 
 struct EmptyStateView: View {
     let icon: String
@@ -502,86 +827,87 @@ struct EmptyStateView: View {
     }
 }
 
-struct SearchView: View {
-    @Binding var searchText: String
-    @Binding var searchResults: [User]
-    @Binding var isSearching: Bool
-    @EnvironmentObject var socialManager: SocialManager
-    @Environment(\.dismiss) private var dismiss
+struct CategoryFlowLayout<Content: View>: View {
+    let categories: [DiscoveryHabitCategory]
+    let content: (DiscoveryHabitCategory) -> Content
+    
+    @State private var sizes: [UUID: CGSize] = [:]
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Search Bar
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    
-                    TextField("Search users...", text: $searchText)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .onChange(of: searchText) { newValue in
-                            Task {
-                                await performSearch(query: newValue)
-                            }
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let spacing: CGFloat = 8
+            
+            VStack(alignment: .leading, spacing: spacing) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
+                    HStack(spacing: spacing) {
+                        ForEach(row, id: \.id) { category in
+                            content(category)
+                                .background(
+                                    GeometryReader { itemGeometry in
+                                        Color.clear
+                                            .onAppear {
+                                                sizes[category.id] = itemGeometry.size
+                                            }
+                                    }
+                                )
                         }
-                    
-                    if !searchText.isEmpty {
-                        Button("Cancel") {
-                            searchText = ""
-                            searchResults = []
-                        }
+                        Spacer()
                     }
-                }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(10)
-                .padding(.horizontal)
-                .padding(.top)
-                
-                // Results
-                if isSearching {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if searchResults.isEmpty && !searchText.isEmpty {
-                    EmptyStateView(
-                        icon: "magnifyingglass",
-                        title: "No users found",
-                        subtitle: "Try searching with a different term"
-                    )
-                } else {
-                    List(searchResults) { user in
-                        UserCard(user: user)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                    }
-                    .listStyle(PlainListStyle())
-                }
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
                 }
             }
         }
+        .frame(height: totalHeight)
     }
     
-    private func performSearch(query: String) async {
-        guard !query.isEmpty else {
-            searchResults = []
-            return
+    private var rows: [[DiscoveryHabitCategory]] {
+        var result: [[DiscoveryHabitCategory]] = []
+        var currentRow: [DiscoveryHabitCategory] = []
+        var currentRowWidth: CGFloat = 0
+        let maxWidth = UIScreen.main.bounds.width - 32 // Account for padding
+        let spacing: CGFloat = 8
+        
+        for category in categories {
+            let categoryWidth = sizes[category.id]?.width ?? 100 // Default width
+            let totalWidth = currentRowWidth + categoryWidth + (currentRow.isEmpty ? 0 : spacing)
+            
+            if totalWidth <= maxWidth {
+                currentRow.append(category)
+                currentRowWidth = totalWidth
+            } else {
+                if !currentRow.isEmpty {
+                    result.append(currentRow)
+                }
+                currentRow = [category]
+                currentRowWidth = categoryWidth
+            }
         }
         
-        isSearching = true
-        searchResults = await socialManager.searchUsers(query: query)
-        isSearching = false
+        if !currentRow.isEmpty {
+            result.append(currentRow)
+        }
+        
+        return result
+    }
+    
+    private var totalHeight: CGFloat {
+        let rowHeight: CGFloat = 32 + 8 // Category height + spacing
+        return CGFloat(rows.count) * rowHeight
     }
 }
 
-#Preview {
-    DiscoveryView()
-        .environmentObject(SocialManager.shared)
-        .environmentObject(HabitManager.shared)
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
