@@ -28,9 +28,9 @@ class SupabaseManager {
     private init() {}
     
     // MARK: - Authentication
-    func signUp(email: String, password: String, name: String) async throws -> User {
-        // Create auth user in Supabase and attach name metadata for profile trigger
-        let metadata: [String: AnyJSON] = ["name": .string(name)]
+    func signUp(email: String, password: String, username: String) async throws -> User {
+        // Create auth user in Supabase and attach username metadata for profile trigger
+        let metadata: [String: AnyJSON] = ["username": .string(username)]
         _ = try await client.auth.signUp(email: email, password: password, data: metadata)
         // After sign up, sign in (if not already) to establish a session
         let user = try await signIn(email: email, password: password)
@@ -59,8 +59,8 @@ class SupabaseManager {
         }
     }
     
-    func updateProfile(userId: String, name: String?, bio: String?, avatar: String?) async throws -> User {
-        let payload = UpdateProfilePayload(display_name: name, bio: bio, avatar_url: avatar)
+    func updateProfile(userId: String, username: String?, bio: String?, avatar: String?) async throws -> User {
+        let payload = UpdateProfilePayload(display_name: username, bio: bio, avatar_url: avatar)
         _ = try await client.database
             .from("profiles")
             .update(payload)
@@ -84,8 +84,8 @@ class SupabaseManager {
         }
         // Profile missing (likely created before trigger). Create it now under RLS as the current user.
         let metadata = session.user.userMetadata ?? [:]
-        let nameMeta: String? = {
-            if let any = metadata["name"], case let .string(val) = any { return val }
+        let usernameMeta: String? = {
+            if let any = metadata["username"], case let .string(val) = any { return val }
             return nil
         }()
         let avatarMeta: String? = {
@@ -95,7 +95,7 @@ class SupabaseManager {
         let insertPayload = NewProfilePayload(
             id: session.user.id,
             email: session.user.email,
-            display_name: nameMeta,
+            display_name: usernameMeta,
             avatar_url: avatarMeta,
             bio: nil
         )
@@ -120,7 +120,7 @@ class SupabaseManager {
         return User(
             id: p.id,
             email: p.email ?? "",
-            name: p.display_name ?? "",
+            username: p.display_name ?? "",
             avatar: p.avatar_url,
             bio: p.bio,
             createdAt: p.created_at,
@@ -165,6 +165,50 @@ class SupabaseManager {
                 .from("habits")
                 .select()
                 .eq("user_id", value: currentUser.id)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits", rows.count)
+            return rows
+        } catch {
+            NSLog("[SupabaseManager] getHabits: error %@", error.localizedDescription)
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    NSLog("[SupabaseManager] getHabits: missing key '%@' at path %@", key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .typeMismatch(let type, let context):
+                    NSLog("[SupabaseManager] getHabits: type mismatch for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .valueNotFound(let type, let context):
+                    NSLog("[SupabaseManager] getHabits: value not found for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .dataCorrupted(let context):
+                    NSLog("[SupabaseManager] getHabits: data corrupted at path %@: %@", context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                @unknown default:
+                    NSLog("[SupabaseManager] getHabits: unknown decoding error")
+                }
+            }
+            
+            // Try to get raw data for debugging
+            do {
+                let rawData = try await getHabitsRawData()
+                NSLog("[SupabaseManager] getHabits: got raw data for debugging")
+            } catch {
+                NSLog("[SupabaseManager] getHabits: failed to get raw data: %@", error.localizedDescription)
+            }
+            
+            throw error
+        }
+    }
+    
+    func getHabitsForUserID(userId: UUID) async throws -> [Habit] {
+        
+        NSLog("[SupabaseManager] getHabits: fetching habits for user %@", userId.uuidString)
+        
+        do {
+            let rows: [Habit] = try await client.database
+                .from("habits")
+                .select()
+                .eq("user_id", value: userId)
                 .order("created_at", ascending: false)
                 .execute()
                 .value

@@ -87,11 +87,11 @@ struct SignUpView: View {
     @EnvironmentObject var authManager: AuthManager
     @State private var email = ""
     @State private var password = ""
-    @State private var name = ""
+    @State private var username = ""
     
     var body: some View {
         VStack(spacing: 16) {
-            ThemedTextField(title: "Name", placeholder: "Enter your name", text: $name)
+            ThemedTextField(title: "Username", placeholder: "Enter your username", text: $username)
             ThemedTextField(title: "Email", placeholder: "Enter your email", text: $email, keyboard: .emailAddress)
             ThemedSecureField(title: "Password", placeholder: "Enter your password", text: $password)
             
@@ -103,7 +103,7 @@ struct SignUpView: View {
             }
             
             Button(action: {
-                Task { await authManager.signUp(email: email, password: password, name: name) }
+                Task { await authManager.signUp(email: email, password: password, username: username) }
             }) {
                 if authManager.isLoading { ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)) }
                 else { Text("Sign Up").fontWeight(.semibold) }
@@ -113,7 +113,7 @@ struct SignUpView: View {
             .background(Color.black)
             .foregroundColor(.white)
             .cornerRadius(10)
-            .disabled(authManager.isLoading || email.isEmpty || password.isEmpty || name.isEmpty)
+            .disabled(authManager.isLoading || email.isEmpty || password.isEmpty || username.isEmpty)
         }
     }
 }
@@ -138,6 +138,9 @@ private struct ThemedTextField: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10).stroke(CaptureTheme.Palette.border, lineWidth: 1)
                 )
+                .onSubmit {
+                    hideKeyboard()
+                }
         }
     }
 }
@@ -160,6 +163,9 @@ private struct ThemedSecureField: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10).stroke(CaptureTheme.Palette.border, lineWidth: 1)
                 )
+                .onSubmit {
+                    hideKeyboard()
+                }
         }
     }
 }
@@ -167,4 +173,8 @@ private struct ThemedSecureField: View {
 #Preview {
     AuthView()
         .environmentObject(AuthManager.shared)
+}
+
+private func hideKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }

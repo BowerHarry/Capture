@@ -103,7 +103,7 @@ class SocialManager: ObservableObject {
                 let habit = post.habitId != nil ? try await loadHabit(habitId: post.habitId!) : nil
                 let capture = post.captureId != nil ? try await loadCapture(captureId: post.captureId!) : nil
                 let isLiked = await checkIfLiked(postId: post.id)
-                let isFollowing = await checkIfFollowing(userId: post.userId)
+                let isFollowing = await isFollowing(userId: post.userId)
                 
                 let item = SocialFeedItem(
                     post: post,
@@ -260,57 +260,7 @@ class SocialManager: ObservableObject {
         }
     }
     
-    // MARK: - Following
-    
-    func toggleFollow(userId: UUID) async {
-        guard let currentUser = authManager.currentUser else {
-            error = "User not authenticated"
-            return
-        }
-        
-        do {
-            let isFollowing = await checkIfFollowing(userId: userId)
-            
-            if isFollowing {
-                // Unfollow
-                try await supabaseManager.client
-                    .from("follows")
-                    .delete()
-                    .eq("follower_id", value: currentUser.id)
-                    .eq("following_id", value: userId)
-                    .execute()
-            } else {
-                // Follow
-                let follow = Follow(followerId: currentUser.id, followingId: userId)
-                try await supabaseManager.client
-                    .from("follows")
-                    .insert(follow)
-                    .execute()
-            }
-            
-            await loadFeedItems()
-        } catch {
-            self.error = "Failed to toggle follow: \(error.localizedDescription)"
-        }
-    }
-    
-    private func checkIfFollowing(userId: UUID) async -> Bool {
-        guard let currentUser = authManager.currentUser else { return false }
-        
-        do {
-            let response: [Follow] = try await supabaseManager.client
-                .from("follows")
-                .select()
-                .eq("follower_id", value: currentUser.id)
-                .eq("following_id", value: userId)
-                .execute()
-                .value
-            
-            return !response.isEmpty
-        } catch {
-            return false
-        }
-    }
+
     
     // MARK: - Helper Methods
     
@@ -327,7 +277,7 @@ class SocialManager: ObservableObject {
         return User(
             id: response.id,
             email: response.email,
-            name: response.fullName ?? response.username ?? "Unknown User",
+            username: response.displayName ?? response.username ?? "Unknown User",
             avatar: response.avatarUrl,
             bio: response.bio,
             createdAt: response.createdAt,
@@ -368,7 +318,7 @@ class SocialManager: ObservableObject {
             let response: [UserProfile] = try await supabaseManager.client
                 .from("profiles")
                 .select()
-                .or("username.ilike.%\(query)%,full_name.ilike.%\(query)%")
+                .or("username.ilike.%\(query)%,display_name.ilike.%\(query)%")
                 .limit(20)
                 .execute()
                 .value
@@ -378,7 +328,7 @@ class SocialManager: ObservableObject {
                 User(
                     id: profile.id,
                     email: profile.email,
-                    name: profile.fullName ?? profile.username ?? "Unknown User",
+                    username: profile.username ?? profile.displayName ?? "Unknown User",
                     avatar: profile.avatarUrl,
                     bio: profile.bio,
                     createdAt: profile.createdAt,
@@ -406,6 +356,182 @@ class SocialManager: ObservableObject {
             await loadFeedItems()
         } catch {
             self.error = "Failed to load trending posts: \(error.localizedDescription)"
+        }
+    }
+    
+    // MARK: - Follow Functionality
+    
+    func toggleFollow(userId: UUID) async {
+        guard let currentUser = authManager.currentUser else {
+            error = "User not authenticated"
+            return
+        }
+        
+        print("🔄 Toggle follow - Current user: \(currentUser.id), Target user: \(userId)")
+        
+        do {
+            // Check if already following
+            let existingFollow: [Follow] = try await supabaseManager.client
+                .from("user_follows")
+                .select()
+                .eq("follower_id", value: currentUser.id)
+                .eq("following_id", value: userId)
+                .execute()
+                .value
+            
+            print("📊 Existing follows found: \(existingFollow.count)")
+            
+            if existingFollow.isEmpty {
+                // Follow user
+                let newFollow = Follow(
+                    followerId: currentUser.id,
+                    followingId: userId
+                )
+                print("➕ Creating new follow: \(newFollow)")
+                
+                try await supabaseManager.client
+                    .from("user_follows")
+                    .insert(newFollow)
+                    .execute()
+                
+                print("✅ Follow created successfully")
+                
+                // Refresh follower counts for both users
+                await authManager.refreshFollowerCounts()
+                await authManager.refreshFollowerCountsForUser(userId: userId)
+            } else {
+                // Unfollow user
+                print("➖ Removing follow")
+                
+                try await supabaseManager.client
+                    .from("user_follows")
+                    .delete()
+                    .eq("follower_id", value: currentUser.id)
+                    .eq("following_id", value: userId)
+                    .execute()
+                
+                print("✅ Follow removed successfully")
+                
+                // Refresh follower counts for both users
+                await authManager.refreshFollowerCounts()
+                await authManager.refreshFollowerCountsForUser(userId: userId)
+            }
+        } catch {
+            print("❌ Follow toggle error: \(error)")
+            self.error = "Failed to toggle follow: \(error.localizedDescription)"
+        }
+    }
+    
+    func isFollowing(userId: UUID) async -> Bool {
+        guard let currentUser = authManager.currentUser else { return false }
+        
+        do {
+            let existingFollow: [Follow] = try await supabaseManager.client
+                .from("user_follows")
+                .select()
+                .eq("follower_id", value: currentUser.id)
+                .eq("following_id", value: userId)
+                .execute()
+                .value
+            
+            let isFollowing = !existingFollow.isEmpty
+            print("🔍 Is following check - User: \(currentUser.id), Target: \(userId), Result: \(isFollowing)")
+            return isFollowing
+        } catch {
+            print("❌ Is following error: \(error)")
+            return false
+        }
+    }
+    
+    func getFollowers(userId: UUID) async -> [User] {
+        do {
+            // First get all follows where this user is being followed
+            let follows: [Follow] = try await supabaseManager.client
+                .from("user_follows")
+                .select()
+                .eq("following_id", value: userId)
+                .execute()
+                .value
+            
+            print("📊 Found \(follows.count) followers for user \(userId)")
+            
+            // Then get the profile for each follower
+            var followers: [User] = []
+            for follow in follows {
+                let profiles: [UserProfile] = try await supabaseManager.client
+                    .from("profiles")
+                    .select()
+                    .eq("id", value: follow.followerId)
+                    .execute()
+                    .value
+                
+                if let profile = profiles.first {
+                    let user = User(
+                        id: profile.id,
+                        email: profile.email,
+                        username: profile.username ?? profile.displayName ?? "Unknown User",
+                        avatar: profile.avatarUrl,
+                        bio: profile.bio,
+                        createdAt: profile.createdAt,
+                        updatedAt: profile.updatedAt,
+                        bestStreak: nil // We'll need to fetch this separately if needed
+                    )
+                    followers.append(user)
+                }
+            }
+            
+            print("👥 Returning \(followers.count) followers")
+            return followers
+        } catch {
+            print("❌ Get followers error: \(error)")
+            self.error = "Failed to get followers: \(error.localizedDescription)"
+            return []
+        }
+    }
+    
+    func getFollowing(userId: UUID) async -> [User] {
+        do {
+            // First get all follows where this user is following others
+            let follows: [Follow] = try await supabaseManager.client
+                .from("user_follows")
+                .select()
+                .eq("follower_id", value: userId)
+                .execute()
+                .value
+            
+            print("📊 Found \(follows.count) following for user \(userId)")
+            
+            // Then get the profile for each user being followed
+            var following: [User] = []
+            for follow in follows {
+                let profiles: [UserProfile] = try await supabaseManager.client
+                    .from("profiles")
+                    .select()
+                    .eq("id", value: follow.followingId)
+                    .execute()
+                    .value
+                
+                if let profile = profiles.first {
+                    let user = User(
+                        id: profile.id,
+                        email: profile.email,
+                        username: profile.username ?? profile.displayName ?? "Unknown User",
+                        avatar: profile.avatarUrl,
+                        bio: profile.bio,
+                        createdAt: profile.createdAt,
+                        updatedAt: profile.updatedAt,
+                        bestStreak: nil // We'll need to fetch this separately if needed
+                    )
+                    following.append(user)
+                }
+            }
+            
+            print("👥 Returning \(following.count) following")
+            return following
+        } catch {
+            print("❌ Get following error: \(error)")
+            self.error = "Failed to get following: \(error.localizedDescription)"
+            return []
         }
     }
 }
