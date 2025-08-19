@@ -35,6 +35,9 @@ struct CustomHabitView: View {
                             Text("Habit name").font(.subheadline).foregroundColor(.secondary)
                             TextField("e.g. Morning Workout", text: $name)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .onSubmit {
+                                    hideKeyboard()
+                                }
                         }
                         
                         // Icon grid
@@ -90,6 +93,9 @@ struct CustomHabitView: View {
                                     .multilineTextAlignment(.center)
                                     .frame(width: 60)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .onSubmit {
+                                        hideKeyboard()
+                                    }
                                 Picker("Period", selection: $period) {
                                     ForEach(TargetFrequency.allCases, id: \.self) { f in
                                         Text(f.displayName).tag(f)
@@ -146,6 +152,9 @@ struct CustomHabitView: View {
                 if let initialCategory = initialCategory { selectedCategory = initialCategory }
                 if let initialColor = initialColor { selectedColor = initialColor }
             }
+            .onTapGesture {
+                hideKeyboard()
+            }
         }
     }
     
@@ -193,5 +202,9 @@ struct CustomHabitView: View {
         case "cyan": return .cyan
         default: return .blue
         }
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }

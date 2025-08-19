@@ -67,6 +67,9 @@ struct SocialFeedView: View {
                     CommentsView(post: post)
                 }
             }
+            .onTapGesture {
+                self.hideKeyboard()
+            }
         }
     }
     
@@ -198,7 +201,7 @@ struct SocialPostCard: View {
                 .clipShape(Circle())
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.user.name)
+                    Text(item.user.username)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     
@@ -385,6 +388,9 @@ struct CreatePostView: View {
                         .padding()
                         .background(Color(.systemGray6))
                         .cornerRadius(12)
+                        .onSubmit {
+                            self.hideKeyboard()
+                        }
                     
                     // Selected Habit
                     if let habit = selectedHabit {
@@ -564,6 +570,9 @@ struct CommentsView: View {
                 HStack(spacing: 12) {
                     TextField("Add a comment...", text: $newComment)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .onSubmit {
+                            self.hideKeyboard()
+                        }
                     
                     Button("Post") {
                         Task {
@@ -629,7 +638,7 @@ struct CommentCard: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(user?.name ?? "Unknown User")
+                    Text(user?.username ?? "Unknown User")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     
@@ -710,6 +719,14 @@ extension SocialManager {
     var currentUserId: UUID? {
         // Return current user ID from auth manager
         return nil
+    }
+}
+
+// MARK: - Utility Functions
+
+extension View {
+    func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 

@@ -28,9 +28,8 @@ struct ContentView: View {
 struct MainTabView: View {
     @State private var selectedTab = 0
     @State private var selectedHabitId: UUID?
-    @State private var selectedUserId: String?
     @State private var showingDebugPanel = false
-    @State private var showingUserProfile = false
+    @State private var isKeyboardVisible = false
     
     var body: some View {
         ZStack {
@@ -56,6 +55,7 @@ struct MainTabView: View {
                         )
                     case 3:
                         DiscoveryView()
+                            .environmentObject(AuthManager.shared)
                     case 4:
                         ProfileView()
                     default:
@@ -68,21 +68,25 @@ struct MainTabView: View {
             }
             
             // Custom floating tab bar
-            VStack {
-                Spacer()
-                CustomTabBar(selectedTab: $selectedTab)
-                    .frame(maxWidth: UIScreen.main.bounds.width * 0.5)
-                    .padding(.bottom, 10)
+            if !isKeyboardVisible {
+                VStack {
+                    Spacer()
+                    CustomTabBar(selectedTab: $selectedTab)
+                        .frame(maxWidth: UIScreen.main.bounds.width * 0.5)
+                        .padding(.bottom, 10)
+                }
+                .allowsHitTesting(true)
             }
-            .allowsHitTesting(true)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showingUserProfile) {
-            if let userId = selectedUserId {
-                UserProfileView(userId: userId) {
-                    showingUserProfile = false
-                    selectedUserId = nil
-                }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isKeyboardVisible = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isKeyboardVisible = false
             }
         }
     }

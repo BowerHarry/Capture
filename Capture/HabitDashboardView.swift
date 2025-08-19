@@ -229,7 +229,7 @@ struct HabitDashboardView: View {
     }
     
     private var displayName: String {
-        if let name = authManager.currentUser?.name {
+                    if let name = authManager.currentUser?.username {
             let components = name.split(separator: " ")
             if let firstName = components.first {
                 return String(firstName)
@@ -519,7 +519,7 @@ private struct TodayProgressCard: View {
                 }
                 
                 Text("\(percentage)%")
-                    .font(.system(size: 20, weight: .heavy))
+                    .font(.system(size: 18, weight: .heavy))
                     .foregroundColor(.green)
             }
             .frame(maxWidth: .infinity, alignment: .center)
