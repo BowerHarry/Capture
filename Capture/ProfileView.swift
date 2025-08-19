@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct ProfileView: View {
     @EnvironmentObject var habitManager: HabitManager
@@ -8,6 +9,7 @@ struct ProfileView: View {
     @State private var showingEditProfile = false
     @State private var showingAvatarPicker = false
     @State private var isLoading = false
+    @State private var avatarRefreshTrigger = 0
     
     var body: some View {
         ScrollView {
@@ -17,7 +19,8 @@ struct ProfileView: View {
                     user: authManager.currentUser,
                     habitManager: habitManager,
                     onEditProfile: { showingEditProfile = true },
-                    onAvatarPicker: { showingAvatarPicker = true }
+                    onAvatarPicker: { showingAvatarPicker = true },
+                    avatarRefreshTrigger: avatarRefreshTrigger
                 )
                 
                 // Profile Tabs
@@ -44,7 +47,9 @@ struct ProfileView: View {
             EditProfileView()
         }
         .sheet(isPresented: $showingAvatarPicker) {
-            AvatarPickerView()
+            AvatarPickerView(onAvatarUpdated: {
+                avatarRefreshTrigger += 1
+            })
         }
         .onAppear {
             // Refresh follower counts when profile appears
@@ -70,6 +75,7 @@ struct ProfileHeaderView: View {
     let habitManager: HabitManager
     let onEditProfile: () -> Void
     let onAvatarPicker: () -> Void
+    let avatarRefreshTrigger: Int
     @EnvironmentObject var socialManager: SocialManager
     @EnvironmentObject var authManager: AuthManager
     @State private var showingFollowers = false
@@ -124,6 +130,7 @@ struct ProfileHeaderView: View {
                         ZStack {
                             // Avatar
                             AvatarImageView(user: user)
+                                .id(avatarRefreshTrigger) // Force refresh when trigger changes
                             
                             // Camera button
                             Button(action: onAvatarPicker) {
@@ -338,26 +345,63 @@ struct ProfileTabsView: View {
 
             
             // Tab Content
-            switch selectedTab {
-            case "overview":
-                OverviewTabView(
-                    totalStreak: totalStreak,
-                    longestStreak: longestStreak,
-                    completionRate: completionRate,
-                    habitManager: habitManager
-                )
-            case "achievements":
-                AchievementsTabView()
-            case "habits":
-                MyHabitsTabView(habitManager: habitManager)
-            default:
-                OverviewTabView(
-                    totalStreak: totalStreak,
-                    longestStreak: longestStreak,
-                    completionRate: completionRate,
-                    habitManager: habitManager
-                )
+            ScrollView {
+                switch selectedTab {
+                case "overview":
+                    OverviewTabView(
+                        totalStreak: totalStreak,
+                        longestStreak: longestStreak,
+                        completionRate: completionRate,
+                        habitManager: habitManager
+                    )
+                case "achievements":
+                    AchievementsTabView()
+                case "habits":
+                    MyHabitsTabView(habitManager: habitManager)
+                default:
+                    OverviewTabView(
+                        totalStreak: totalStreak,
+                        longestStreak: longestStreak,
+                        completionRate: completionRate,
+                        habitManager: habitManager
+                    )
+                }
             }
+            .gesture(
+                DragGesture()
+                    .onEnded { value in
+                        let threshold: CGFloat = 50
+                        if value.translation.width > threshold {
+                            // Swipe right - go to previous tab
+                            switch selectedTab {
+                            case "achievements":
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    selectedTab = "overview"
+                                }
+                            case "habits":
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    selectedTab = "achievements"
+                                }
+                            default:
+                                break
+                            }
+                        } else if value.translation.width < -threshold {
+                            // Swipe left - go to next tab
+                            switch selectedTab {
+                            case "overview":
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    selectedTab = "achievements"
+                                }
+                            case "achievements":
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    selectedTab = "habits"
+                                }
+                            default:
+                                break
+                            }
+                        }
+                    }
+            )
         }
     }
 }
@@ -896,24 +940,305 @@ struct EditProfileView: View {
 
 struct AvatarPickerView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var authManager: AuthManager
+    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedImage: UIImage?
+    @State private var showingImageCropper = false
+    @State private var isLoading = false
+    @State private var showSuccessMessage = false
+    
+    let onAvatarUpdated: () -> Void
+    
+    // Generic avatars
+    private let genericAvatars = [
+        "👤", "👨‍💼", "👩‍💼", "👨‍🎨", "👩‍🎨", "👨‍🔬", "👩‍🔬",
+        "👨‍⚕️", "👩‍⚕️", "👨‍🏫", "👩‍🏫", "👨‍💻", "👩‍💻", "👨‍🚀", "👩‍🚀"
+    ]
     
     var body: some View {
         NavigationView {
-            VStack {
-                Text("Avatar Picker")
-                    .font(.title)
-                Text("This would allow users to select or upload a profile picture")
-                    .foregroundColor(.secondary)
-            }
-            .navigationTitle("Profile Picture")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            VStack(spacing: 24) {
+                // Custom header with buttons
+                HStack {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.blue)
+                    
+                    Spacer()
+                    
+                    Text("Choose Avatar")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    Spacer()
+                    
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundColor(.blue)
+                }
+                .padding(.horizontal)
+                .padding(.top)
+                
+                // Header description
+                VStack(spacing: 8) {
+                    Text("Select a generic avatar or upload your own photo")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                
+                // Current avatar preview
+                VStack(spacing: 12) {
+                    Text("Current Avatar")
+                        .font(.headline)
+                        .fontWeight(.medium)
+                    
+                    AvatarImageView(user: authManager.currentUser)
+                        .frame(width: 100, height: 100)
+                }
+                
+                // Generic avatars section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Generic Avatars")
+                        .font(.headline)
+                        .fontWeight(.medium)
+                    
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 16) {
+                        ForEach(genericAvatars, id: \.self) { avatar in
+                            Button(action: {
+                                Task {
+                                    await selectGenericAvatar(avatar)
+                                }
+                            }) {
+                                Text(avatar)
+                                    .font(.system(size: 32))
+                                    .frame(width: 60, height: 60)
+                                    .background(Color(.systemGray6))
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                }
+                
+                // Upload photo section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Upload Photo")
+                        .font(.headline)
+                        .fontWeight(.medium)
+                    
+                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "photo")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Choose from Photo Library")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                
+                                Text("Select and crop your photo")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(16)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .onChange(of: selectedItem) { item in
+                print("📸 Photo selected, loading image data...")
+                Task {
+                    if let data = try? await item?.loadTransferable(type: Data.self) {
+                        print("📸 Image data loaded, size: \(data.count) bytes")
+                        if let image = UIImage(data: data) {
+                            print("📸 UIImage created successfully, size: \(image.size)")
+                            selectedImage = image
+                            showingImageCropper = true
+                        } else {
+                            print("❌ Failed to create UIImage from data")
+                        }
+                    } else {
+                        print("❌ Failed to load image data from PhotosPicker")
+                    }
                 }
             }
+            .sheet(isPresented: $showingImageCropper) {
+                if let image = selectedImage {
+                    ImageCropperView(image: image) { croppedImage in
+                        Task {
+                            await uploadAvatar(croppedImage)
+                        }
+                    }
+                }
+            }
+            .onChange(of: showingImageCropper) { showing in
+                if showing, let image = selectedImage {
+                    print("📱 Presenting ImageCropperView with image size: \(image.size)")
+                } else if !showing {
+                    print("📱 ImageCropperView dismissed")
+                }
+            }
+            .overlay(
+                ZStack {
+                    if isLoading {
+                        Color.black.opacity(0.3)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            
+                            Text("Uploading avatar...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                    }
+                    
+                    if showSuccessMessage {
+                        VStack {
+                            Spacer()
+                            
+                            HStack(spacing: 12) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.title2)
+                                
+                                Text("Avatar updated successfully!")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(Color.black.opacity(0.8))
+                            .cornerRadius(25)
+                            .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                            
+                            Spacer()
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeInOut(duration: 0.3), value: showSuccessMessage)
+                    }
+                }
+            )
+        }
+    }
+    
+    private func selectGenericAvatar(_ avatar: String) async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            // Convert emoji to image and upload
+            if let image = emojiToImage(avatar) {
+                await uploadAvatar(image)
+            }
+        } catch {
+            print("Error selecting generic avatar: \(error)")
+        }
+    }
+    
+    private func emojiToImage(_ emoji: String) -> UIImage? {
+        let size = CGSize(width: 200, height: 200)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        
+        let rect = CGRect(origin: .zero, size: size)
+        let context = UIGraphicsGetCurrentContext()
+        
+        // Draw background
+        context?.setFillColor(UIColor.systemGray6.cgColor)
+        context?.fillEllipse(in: rect)
+        
+        // Draw emoji
+        let fontSize = size.width * 0.6
+        let font = UIFont.systemFont(ofSize: fontSize)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font
+        ]
+        
+        let emojiSize = emoji.size(withAttributes: attributes)
+        let emojiRect = CGRect(
+            x: (size.width - emojiSize.width) / 2,
+            y: (size.height - emojiSize.height) / 2,
+            width: emojiSize.width,
+            height: emojiSize.height
+        )
+        
+        emoji.draw(in: emojiRect, withAttributes: attributes)
+        
+        return UIGraphicsGetImageFromCurrentImageContext()
+    }
+    
+    private func uploadAvatar(_ image: UIImage) async {
+        print("📱 Starting avatar upload...")
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            // Compress image
+            guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+                throw NSError(domain: "AvatarError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to compress image"])
+            }
+            
+            // Upload to Supabase storage
+            let avatarURL = try await SupabaseManager.shared.uploadAvatar(
+                userId: authManager.currentUser?.id.uuidString ?? "",
+                imageData: imageData
+            )
+            
+            // Update user profile
+            let updatedUser = try await SupabaseManager.shared.updateProfile(
+                userId: authManager.currentUser?.id.uuidString ?? "",
+                username: authManager.currentUser?.username,
+                bio: authManager.currentUser?.bio,
+                avatar: avatarURL
+            )
+            
+            // Update auth manager
+            await authManager.updateCurrentUser(updatedUser)
+            
+            // Force a complete refresh of the user data
+            await authManager.refreshFollowerCounts()
+            
+            // Trigger avatar refresh via callback
+            onAvatarUpdated()
+            
+            // Show success message briefly, then dismiss
+            showSuccessMessage = true
+            
+            // Dismiss after a short delay to show success message
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                showSuccessMessage = false
+                dismiss()
+            }
+            
+        } catch {
+            print("Error uploading avatar: \(error)")
+            // You might want to show an error alert here
         }
     }
 }
@@ -1079,7 +1404,16 @@ struct AvatarImageView: View {
     
     private var avatarURL: URL? {
         guard let avatarString = user?.avatar, !avatarString.isEmpty else { return nil }
-        return URL(string: avatarString)
+        // Add cache-busting parameter to force refresh
+        var urlString = avatarString
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let userId = user?.id.uuidString ?? ""
+        if !urlString.contains("?") {
+            urlString += "?t=\(timestamp)&u=\(userId)"
+        } else {
+            urlString += "&t=\(timestamp)&u=\(userId)"
+        }
+        return URL(string: urlString)
     }
     
     private var userInitial: String {
@@ -1121,6 +1455,298 @@ struct AvatarImageView: View {
         .environmentObject(HabitManager.shared)
         .environmentObject(AuthManager.shared)
         .environmentObject(SocialManager.shared)
+}
+
+// MARK: - Image Cropper View
+
+struct ImageCropperView: View {
+    let image: UIImage
+    let onCrop: (UIImage) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @State private var offset = CGSize.zero
+    @State private var lastOffset = CGSize.zero
+    @State private var lastScale: CGFloat = 1.0
+    @State private var viewSize: CGSize = .zero
+    
+    init(image: UIImage, onCrop: @escaping (UIImage) -> Void) {
+        self.image = image
+        self.onCrop = onCrop
+        print("🖼️ ImageCropperView initialized with image size: \(image.size)")
+    }
+    
+    var body: some View {
+        NavigationView {
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    // Cropper view
+                    ZStack {
+                        Color.black
+                            .ignoresSafeArea()
+                        
+                        // Image with gesture
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .scaleEffect(scale)
+                            .offset(offset)
+                            .onAppear {
+                                viewSize = geometry.size
+                                print("📐 View size: \(viewSize)")
+                            }
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { value in
+                                        let newOffset = CGSize(
+                                            width: lastOffset.width + value.translation.width,
+                                            height: lastOffset.height + value.translation.height
+                                        )
+                                        
+                                        // Constrain offset to keep crop circle within image bounds
+                                        offset = constrainOffset(newOffset, scale: scale, imageSize: image.size, viewSize: viewSize, cropSize: 300)
+                                        print("🖱️ Drag gesture: offset = \(offset), translation = \(value.translation)")
+                                    }
+                                    .onEnded { _ in
+                                        lastOffset = offset
+                                        print("🖱️ Drag ended: final offset = \(offset)")
+                                    }
+                            )
+                            .gesture(
+                                MagnificationGesture()
+                                    .onChanged { value in
+                                        let delta = value / lastScale
+                                        lastScale = value
+                                        scale = min(max(scale * delta, 1.0), 3.0)
+                                        print("🔍 Zoom gesture: scale = \(scale), delta = \(delta)")
+                                    }
+                                    .onEnded { _ in
+                                        lastScale = 1.0
+                                        print("🔍 Zoom ended: final scale = \(scale)")
+                                    }
+                            )
+                        
+                        // Crop overlay
+                        CropOverlay()
+                    }
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        let croppedImage = cropImage()
+                        onCrop(croppedImage)
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+    
+    private func constrainOffset(_ newOffset: CGSize, scale: CGFloat, imageSize: CGSize, viewSize: CGSize, cropSize: CGFloat) -> CGSize {
+        // Calculate the scaled image dimensions as they appear on screen
+        let aspectRatio = imageSize.width / imageSize.height
+        var displayWidth: CGFloat
+        var displayHeight: CGFloat
+        
+        // Use actual view size to calculate display dimensions
+        let containerSize = min(viewSize.width, viewSize.height)
+        
+        if aspectRatio > 1 {
+            // Landscape
+            displayWidth = containerSize
+            displayHeight = containerSize / aspectRatio
+        } else {
+            // Portrait
+            displayHeight = containerSize
+            displayWidth = containerSize * aspectRatio
+        }
+        
+        // Apply scale
+        let scaledWidth = displayWidth * scale
+        let scaledHeight = displayHeight * scale
+        
+        // Calculate maximum allowed offset to keep crop circle within image bounds
+        let maxOffsetX = max(0, (scaledWidth - cropSize) / 2)
+        let maxOffsetY = max(0, (scaledHeight - cropSize) / 2)
+        
+        // Constrain the offset
+        let constrainedX = max(-maxOffsetX, min(maxOffsetX, newOffset.width))
+        let constrainedY = max(-maxOffsetY, min(maxOffsetY, newOffset.height))
+        
+        return CGSize(width: constrainedX, height: constrainedY)
+    }
+    
+    private func cropImage() -> UIImage {
+        print("✂️ Starting crop process...")
+        print("✂️ Original image size: \(image.size)")
+        print("✂️ Current scale: \(scale)")
+        print("✂️ Current offset: \(offset)")
+        print("✂️ View size: \(viewSize)")
+        
+        let outputSize = CGSize(width: 400, height: 400)
+        let cropRadius = outputSize.width / 2
+        
+        UIGraphicsBeginImageContextWithOptions(outputSize, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        
+        guard let context = UIGraphicsGetCurrentContext() else {
+            print("❌ Failed to get graphics context")
+            return image
+        }
+        
+        // Create circular clipping path
+        let rect = CGRect(origin: .zero, size: outputSize)
+        context.addEllipse(in: rect)
+        context.clip()
+        
+        // Calculate how the image is displayed in the view (aspect fit)
+        let imageAspectRatio = image.size.width / image.size.height
+        var imageDisplaySize: CGSize
+        
+        // Use actual view size to calculate display dimensions
+        let containerSize = min(viewSize.width, viewSize.height)
+        
+        if imageAspectRatio > 1 {
+            // Landscape
+            imageDisplaySize = CGSize(width: containerSize, height: containerSize / imageAspectRatio)
+        } else {
+            // Portrait  
+            imageDisplaySize = CGSize(width: containerSize * imageAspectRatio, height: containerSize)
+        }
+        
+        // Apply scale to display size
+        let scaledDisplaySize = CGSize(
+            width: imageDisplaySize.width * scale,
+            height: imageDisplaySize.height * scale
+        )
+        
+        // Calculate the crop area in image coordinates - simple approach
+        
+        // The crop circle is always centered in the view
+        let cropCenterInView = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        
+        // Calculate where the image appears in the view (centered, then offset)
+        let imageViewRect = CGRect(
+            x: (viewSize.width - scaledDisplaySize.width) / 2 + offset.width,
+            y: (viewSize.height - scaledDisplaySize.height) / 2 + offset.height,
+            width: scaledDisplaySize.width,
+            height: scaledDisplaySize.height
+        )
+        
+        // Calculate the crop center relative to the image view
+        let cropCenterRelativeToImageView = CGPoint(
+            x: cropCenterInView.x - imageViewRect.origin.x,
+            y: cropCenterInView.y - imageViewRect.origin.y
+        )
+        
+        // Normalize to 0-1 range within the image view
+        let normalizedCropCenter = CGPoint(
+            x: cropCenterRelativeToImageView.x / imageViewRect.width,
+            y: cropCenterRelativeToImageView.y / imageViewRect.height
+        )
+        
+        // Convert to actual image coordinates
+        let cropCenterInImage = CGPoint(
+            x: normalizedCropCenter.x * image.size.width,
+            y: normalizedCropCenter.y * image.size.height
+        )
+        
+        // Calculate the crop radius in image coordinates
+        let cropRadiusInImage = (cropRadius / imageViewRect.width) * image.size.width
+        
+        // Calculate the source rect in the original image
+        var sourceRect = CGRect(
+            x: cropCenterInImage.x - cropRadiusInImage,
+            y: cropCenterInImage.y - cropRadiusInImage,
+            width: cropRadiusInImage * 2,
+            height: cropRadiusInImage * 2
+        )
+        
+        // Clamp the source rect to be within the image bounds
+        sourceRect = sourceRect.intersection(CGRect(origin: .zero, size: image.size))
+        
+        print("✂️ Image display size: \(imageDisplaySize)")
+        print("✂️ Scaled display size: \(scaledDisplaySize)")
+        print("✂️ Image view rect: \(imageViewRect)")
+        print("✂️ Crop center in view: \(cropCenterInView)")
+        print("✂️ Crop center relative to image view: \(cropCenterRelativeToImageView)")
+        print("✂️ Normalized crop center: \(normalizedCropCenter)")
+        print("✂️ Crop center in image: \(cropCenterInImage)")
+        print("✂️ Crop radius in image: \(cropRadiusInImage)")
+        print("✂️ Source rect (before clamp): \(CGRect(x: cropCenterInImage.x - cropRadiusInImage, y: cropCenterInImage.y - cropRadiusInImage, width: cropRadiusInImage * 2, height: cropRadiusInImage * 2))")
+        print("✂️ Source rect (after clamp): \(sourceRect)")
+        print("✂️ Image bounds: \(CGRect(origin: .zero, size: image.size))")
+        
+        // Create a cropped image first, then draw it
+        if !sourceRect.isEmpty {
+            let croppedSourceImage = image.cgImage?.cropping(to: sourceRect)
+            if let croppedCGImage = croppedSourceImage {
+                let croppedUIImage = UIImage(cgImage: croppedCGImage)
+                croppedUIImage.draw(in: CGRect(origin: .zero, size: outputSize))
+            } else {
+                // Fallback: draw the full image
+                image.draw(in: CGRect(origin: .zero, size: outputSize))
+            }
+        } else {
+            // Source rect is empty, draw the full image
+            image.draw(in: CGRect(origin: .zero, size: outputSize))
+        }
+        
+        guard let croppedImage = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("❌ Failed to get cropped image from context")
+            return image
+        }
+        
+        print("✅ Crop successful: \(croppedImage.size)")
+        return croppedImage
+    }
+}
+
+struct CropOverlay: View {
+    var body: some View {
+        ZStack {
+            // Semi-transparent overlay
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .allowsHitTesting(false) // Don't block touch events
+                .onAppear {
+                    print("🎭 CropOverlay: Black overlay appeared")
+                }
+            
+            // Circular crop area - clear circle showing the image
+            Circle()
+                .fill(Color.clear)
+                .frame(width: 300, height: 300)
+                .blendMode(.destinationOut)
+                .allowsHitTesting(false) // Don't block touch events
+                .onAppear {
+                    print("🎭 CropOverlay: Clear circle appeared")
+                }
+            
+            // White border around the crop area
+            Circle()
+                .stroke(Color.white, lineWidth: 3)
+                .frame(width: 300, height: 300)
+                .allowsHitTesting(false) // Don't block touch events
+                .onAppear {
+                    print("🎭 CropOverlay: White border appeared")
+                }
+        }
+        .compositingGroup()
+        .allowsHitTesting(false) // Don't block touch events
+        .onAppear {
+            print("🎭 CropOverlay: Complete overlay appeared")
+        }
+    }
 }
 
 struct ProfileUserListItem: View {

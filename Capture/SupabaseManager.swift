@@ -69,6 +69,37 @@ class SupabaseManager {
         return try await fetchCurrentProfile()
     }
     
+    func uploadAvatar(userId: String, imageData: Data) async throws -> String {
+        let fileName = "\(userId)_avatar.jpg"
+        let filePath = "avatars/\(fileName)"
+        
+        // Try to delete existing avatar first
+        do {
+            try await client.storage
+                .from("avatars")
+                .remove(paths: [filePath])
+        } catch {
+            // File doesn't exist, which is fine
+            print("No existing avatar to delete: \(error)")
+        }
+        
+        // Upload to Supabase storage
+        let _ = try await client.storage
+            .from("avatars")
+            .upload(
+                path: filePath,
+                file: imageData,
+                options: FileOptions(contentType: "image/jpeg")
+            )
+        
+        // Get public URL
+        let publicURL = try client.storage
+            .from("avatars")
+            .getPublicURL(path: filePath)
+        
+        return publicURL.absoluteString
+    }
+    
     // MARK: - Helpers (Profiles)
     private func fetchCurrentProfile() async throws -> User {
         let session = try await client.auth.session

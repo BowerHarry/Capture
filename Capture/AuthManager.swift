@@ -98,6 +98,10 @@ class AuthManager: ObservableObject {
         isLoading = false
     }
     
+    func updateCurrentUser(_ user: User) async {
+        self.currentUser = user
+    }
+    
     func refreshFollowerCounts() async {
         guard let currentUser = currentUser else { 
             print("❌ No current user to refresh follower counts")
