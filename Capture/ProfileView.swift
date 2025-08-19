@@ -3,6 +3,7 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject var habitManager: HabitManager
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var socialManager: SocialManager
     @State private var selectedTab = "overview"
     @State private var showingEditProfile = false
     @State private var showingAvatarPicker = false
@@ -39,13 +40,27 @@ struct ProfileView: View {
                 endPoint: .bottomTrailing
             )
         )
-            .sheet(isPresented: $showingEditProfile) {
-                EditProfileView()
-            }
+        .sheet(isPresented: $showingEditProfile) {
+            EditProfileView()
+        }
         .sheet(isPresented: $showingAvatarPicker) {
             AvatarPickerView()
         }
+        .onAppear {
+            // Refresh follower counts when profile appears
+            Task {
+                await authManager.refreshFollowerCounts()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // Refresh follower counts when app comes to foreground
+            Task {
+                await authManager.refreshFollowerCounts()
+            }
+        }
     }
+    
+
 }
 
 // MARK: - Profile Header
@@ -55,6 +70,10 @@ struct ProfileHeaderView: View {
     let habitManager: HabitManager
     let onEditProfile: () -> Void
     let onAvatarPicker: () -> Void
+    @EnvironmentObject var socialManager: SocialManager
+    @EnvironmentObject var authManager: AuthManager
+    @State private var showingFollowers = false
+    @State private var showingFollowing = false
     
     private var totalHabits: Int {
         habitManager.habits.count
@@ -69,8 +88,11 @@ struct ProfileHeaderView: View {
     }
     
     private var followers: Int {
-        // Mock data for now
-        12
+        authManager.currentUser?.followersCount ?? 0
+    }
+    
+    private var following: Int {
+        authManager.currentUser?.followingCount ?? 0
     }
     
     private var totalGroupStreaks: Int {
@@ -119,7 +141,7 @@ struct ProfileHeaderView: View {
                     
                     // User info
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(user?.name ?? "User")
+                        Text(user?.username ?? "User")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundColor(.primary)
                             .lineLimit(1)
@@ -166,6 +188,44 @@ struct ProfileHeaderView: View {
                     }
                 }
                 
+                // Stats section
+                HStack(spacing: 12) {
+                    // Captures
+                    StatCard(
+                        icon: "camera",
+                        value: "\(totalCaptures)",
+                        label: "Captures",
+                        gradient: [Color.blue.opacity(0.1), Color.cyan.opacity(0.05)],
+                        iconColor: .blue,
+                        textColor: .blue
+                    )
+                    
+                    // Followers
+                    Button(action: { showingFollowers = true }) {
+                        StatCard(
+                            icon: "person.2",
+                            value: "\(followers)",
+                            label: "Followers",
+                            gradient: [Color.purple.opacity(0.1), Color.pink.opacity(0.05)],
+                            iconColor: .purple,
+                            textColor: .purple
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    // Following
+                    Button(action: { showingFollowing = true }) {
+                        StatCard(
+                            icon: "person.3",
+                            value: "\(following)",
+                            label: "Following",
+                            gradient: [Color.green.opacity(0.1), Color.teal.opacity(0.05)],
+                            iconColor: .green,
+                            textColor: .green
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
                 
             }
             .padding(24)
@@ -186,6 +246,12 @@ struct ProfileHeaderView: View {
             RoundedRectangle(cornerRadius: 20)
                 .stroke(Color(.systemGray5), lineWidth: 1)
         )
+        .sheet(isPresented: $showingFollowers) {
+            FollowersListView(userId: user?.id ?? UUID())
+        }
+        .sheet(isPresented: $showingFollowing) {
+            FollowingListView(userId: user?.id ?? UUID())
+        }
     }
 }
 
@@ -211,7 +277,7 @@ struct StatCard: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(textColor.opacity(0.8))
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 80)
         .padding(12)
         .background(
             LinearGradient(
@@ -337,6 +403,10 @@ struct OverviewTabView: View {
     let longestStreak: Int
     let completionRate: Int
     let habitManager: HabitManager
+    @EnvironmentObject var socialManager: SocialManager
+    @EnvironmentObject var authManager: AuthManager
+    @State private var showingFollowers = false
+    @State private var showingFollowing = false
     
     private var totalHabits: Int {
         habitManager.habits.count
@@ -347,8 +417,11 @@ struct OverviewTabView: View {
     }
     
     private var followers: Int {
-        // Mock data for now
-        12
+        authManager.currentUser?.followersCount ?? 0
+    }
+    
+    private var following: Int {
+        authManager.currentUser?.followingCount ?? 0
     }
     
     private var totalGroupStreaks: Int {
@@ -381,32 +454,6 @@ struct OverviewTabView: View {
                 
                 // Followers
                 StatCard(
-                    icon: "person.2",
-                    value: "\(followers)",
-                    label: "Followers",
-                    gradient: [Color.purple.opacity(0.1), Color.pink.opacity(0.05)],
-                    iconColor: .purple,
-                    textColor: .purple
-                )
-                
-                // Captures
-                StatCard(
-                    icon: "camera.aperture",
-                    value: "\(totalCaptures)",
-                    label: "Captures",
-                    gradient: [Color.blue.opacity(0.1), Color.indigo.opacity(0.05)],
-                    iconColor: .blue,
-                    textColor: .blue
-                )
-            }
-            
-            // Progress Grid for last 6 months
-            ProfileProgressGrid(habitManager: habitManager)
-            
-            // Additional Stats below header
-            HStack(spacing: 12) {
-                // Total Group Streaks
-                StatCard(
                     icon: "flame",
                     value: "\(totalGroupStreaks)",
                     label: "Group Streaks",
@@ -415,7 +462,6 @@ struct OverviewTabView: View {
                     textColor: .orange
                 )
                 
-                // All Time Best Streak
                 StatCard(
                     icon: "trophy",
                     value: "\(allTimeBestStreak)",
@@ -425,8 +471,18 @@ struct OverviewTabView: View {
                     textColor: .yellow
                 )
             }
+            
+            // Progress Grid for last 6 months
+            ProfileProgressGrid(habitManager: habitManager)
+            
         }
         .padding(20)
+        .sheet(isPresented: $showingFollowers) {
+            FollowersListView(userId: authManager.currentUser?.id ?? UUID())
+        }
+        .sheet(isPresented: $showingFollowing) {
+            FollowingListView(userId: authManager.currentUser?.id ?? UUID())
+        }
     }
 }
 
@@ -798,8 +854,14 @@ struct EditProfileView: View {
             Form {
                 Section("Profile Information") {
                     TextField("Name", text: $name)
+                        .onSubmit {
+                            hideKeyboard()
+                        }
                     TextField("Bio", text: $bio, axis: .vertical)
                         .lineLimit(3...6)
+                        .onSubmit {
+                            hideKeyboard()
+                        }
                 }
             }
             .navigationTitle("Edit Profile")
@@ -818,10 +880,17 @@ struct EditProfileView: View {
                 }
             }
             .onAppear {
-                name = authManager.currentUser?.name ?? ""
+                name = authManager.currentUser?.username ?? ""
                 bio = authManager.currentUser?.bio ?? ""
             }
+            .onTapGesture {
+                hideKeyboard()
+            }
         }
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
@@ -900,7 +969,7 @@ struct ProfileProgressGrid: View {
                     .frame(width: totalWidth, height: gridHeight, alignment: .topLeading)
                 }
             }
-            .frame(height: 120)
+            .frame(height: 80)
         }
         .padding(16)
         .background(Color(.systemBackground))
@@ -1014,7 +1083,7 @@ struct AvatarImageView: View {
     }
     
     private var userInitial: String {
-        user?.name.prefix(1).uppercased() ?? "U"
+                        user?.username.prefix(1).uppercased() ?? "U"
     }
     
     var body: some View {
@@ -1044,5 +1113,175 @@ struct AvatarImageView: View {
             Circle()
                 .stroke(Color.primary.opacity(0.1), lineWidth: 4)
         )
+    }
+}
+
+#Preview {
+    ProfileView()
+        .environmentObject(HabitManager.shared)
+        .environmentObject(AuthManager.shared)
+        .environmentObject(SocialManager.shared)
+}
+
+struct ProfileUserListItem: View {
+    let user: User
+    @State private var showingUserProfile = false
+    
+    var body: some View {
+        Button(action: {
+            showingUserProfile = true
+        }) {
+            HStack(spacing: 16) {
+                AsyncImage(url: URL(string: user.avatar ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.title2)
+                                .foregroundColor(.gray)
+                        )
+                }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(user.username)
+                        .font(.headline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                    
+                    if let bio = user.bio {
+                        Text(bio)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(16)
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .sheet(isPresented: $showingUserProfile) {
+            UserProfileView(user: user)
+        }
+    }
+}
+
+// MARK: - Followers/Following Lists
+
+struct FollowersListView: View {
+    let userId: UUID
+    @EnvironmentObject var socialManager: SocialManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var followers: [User] = []
+    @State private var isLoading = true
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if followers.isEmpty {
+                    VStack(spacing: 16) {
+                        Text("👥")
+                            .font(.system(size: 48))
+                        Text("No Followers Yet")
+                            .font(.headline)
+                            .fontWeight(.medium)
+                        Text("When people follow you, they'll appear here")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(followers) { user in
+                        ProfileUserListItem(user: user)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                    }
+                    .listStyle(PlainListStyle())
+                }
+            }
+            .navigationTitle("Followers")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task {
+            print("🔄 Loading followers for user: \(userId)")
+            followers = await socialManager.getFollowers(userId: userId)
+            print("📊 Loaded \(followers.count) followers")
+            isLoading = false
+        }
+    }
+}
+
+struct FollowingListView: View {
+    let userId: UUID
+    @EnvironmentObject var socialManager: SocialManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var following: [User] = []
+    @State private var isLoading = true
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if following.isEmpty {
+                    VStack(spacing: 16) {
+                        Text("👥")
+                            .font(.system(size: 48))
+                        Text("Not Following Anyone")
+                            .font(.headline)
+                            .fontWeight(.medium)
+                        Text("When you follow people, they'll appear here")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(following) { user in
+                        ProfileUserListItem(user: user)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                    }
+                    .listStyle(PlainListStyle())
+                }
+            }
+            .navigationTitle("Following")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task {
+            print("🔄 Loading following for user: \(userId)")
+            following = await socialManager.getFollowing(userId: userId)
+            print("📊 Loaded \(following.count) following")
+            isLoading = false
+        }
     }
 }
