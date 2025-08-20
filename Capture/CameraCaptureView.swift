@@ -11,6 +11,8 @@ struct CameraCaptureView: View {
     @State private var isPublic = true
     @State private var isSaving = false
     @State private var capturedImage: UIImage?
+    @State private var showingImagePicker = false
+    @State private var showingCapturedImage = false
     
     var body: some View {
         GeometryReader { _ in
@@ -31,7 +33,20 @@ struct CameraCaptureView: View {
                                 .background(Color.black.opacity(0.5))
                                 .clipShape(Circle())
                         }
+                        
                         Spacer()
+                        
+                        // Photo library button
+                        Button(action: {
+                            showingImagePicker = true
+                        }) {
+                            Image(systemName: "photo.on.rectangle")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(10)
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
@@ -40,7 +55,7 @@ struct CameraCaptureView: View {
                     // Shutter controls
                     HStack(spacing: 40) {
                         Spacer()
-                        Button(action: captureAndSave) {
+                        Button(action: capturePhoto) {
                             ZStack {
                                 Circle()
                                     .fill(Color.white)
@@ -68,25 +83,142 @@ struct CameraCaptureView: View {
                 }
             }
             .task { await cameraManager.ensureSessionRunning() }
+            .sheet(isPresented: $showingImagePicker) {
+                ImagePickerCropper(selectedImage: $capturedImage)
+            }
+            .onChange(of: capturedImage) { image in
+                if let image = image {
+                    showingCapturedImage = true
+                }
+            }
+            .sheet(isPresented: $showingCapturedImage) {
+                if let image = capturedImage {
+                    CapturedImageView(
+                        image: image,
+                        isPublic: $isPublic,
+                        onSave: {
+                            Task {
+                                await saveImage(image)
+                            }
+                        },
+                        onRetake: {
+                            capturedImage = nil
+                            showingCapturedImage = false
+                        }
+                    )
+                }
+            }
         }
     }
     
-    private func captureAndSave() {
+    private func capturePhoto() {
         guard let habitIdString = preselectedHabitId,
               let habitId = UUID(uuidString: habitIdString) else { return }
-        isSaving = true
+        
         cameraManager.capturePhoto { image in
-            Task {
-                defer { isSaving = false }
-                guard let image = image, let data = image.jpegData(compressionQuality: 0.85) else { return }
-                await habitManager.createCapture(
-                    habitId: habitId,
-                    caption: nil,
-                    isPublic: isPublic,
-                    imageData: data
-                )
-                if habitManager.errorMessage == nil {
-                    onBack()
+            if let image = image {
+                capturedImage = image
+                showingCapturedImage = true
+            }
+        }
+    }
+    
+    private func saveImage(_ image: UIImage) async {
+        guard let habitIdString = preselectedHabitId,
+              let habitId = UUID(uuidString: habitIdString),
+              let data = image.jpegData(compressionQuality: 0.85) else { return }
+        
+        isSaving = true
+        defer { isSaving = false }
+        
+        await habitManager.createCapture(
+            habitId: habitId,
+            caption: nil,
+            isPublic: isPublic,
+            imageData: data
+        )
+        
+        if habitManager.errorMessage == nil {
+            onBack()
+        }
+    }
+}
+
+// MARK: - Captured Image View
+
+struct CapturedImageView: View {
+    let image: UIImage
+    @Binding var isPublic: Bool
+    let onSave: () -> Void
+    let onRetake: () -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingCropper = false
+    @State private var croppedImage: UIImage?
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                // Image preview
+                Image(uiImage: croppedImage ?? image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: 400)
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+                
+                // Public/Private toggle
+                HStack {
+                    Text("Make public")
+                        .font(.headline)
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $isPublic)
+                        .labelsHidden()
+                }
+                .padding(.horizontal, 20)
+                
+                // Action buttons
+                HStack(spacing: 16) {
+                    Button("Retake") {
+                        onRetake()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    
+                    Button("Crop") {
+                        showingCropper = true
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    
+                    Button("Save") {
+                        onSave()
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 20)
+                
+                Spacer()
+            }
+            .padding(.top, 20)
+            .navigationTitle("Review Photo")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $showingCropper) {
+                ImageCropperView(image: image) { cropped in
+                    croppedImage = cropped
                 }
             }
         }
