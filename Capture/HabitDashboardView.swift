@@ -3,6 +3,7 @@ import SwiftUI
 struct HabitDashboardView: View {
     @EnvironmentObject var habitManager: HabitManager
     @EnvironmentObject var authManager: AuthManager
+    @StateObject private var imagePreloader = ImagePreloader.shared
     @State private var showingHabitPicker = false
     @State private var tempSelectedHabit: Habit? = nil
     @State private var showDebug = false
@@ -182,19 +183,42 @@ struct HabitDashboardView: View {
                         .gesture(
                             DragGesture()
                                 .onEnded { value in
-                                    let threshold: CGFloat = 50
-                                    if value.translation.width > threshold {
-                                        // Swipe right - go to previous tab
-                                        if selectedTab == "grid" {
-                                            withAnimation(.easeInOut(duration: 0.3)) {
-                                                selectedTab = "overview"
+                                    let verticalThreshold: CGFloat = 50
+                                    let horizontalThreshold: CGFloat = 50
+                                    
+                                    // Check if the gesture is primarily vertical
+                                    if abs(value.translation.height) > abs(value.translation.width) {
+                                        // Vertical swipe - handle collapse/expand
+                                        if value.translation.height < -verticalThreshold {
+                                            // Swipe up - collapse habits
+                                            if !habitsCollapsed {
+                                                withAnimation(.easeInOut(duration: 0.3)) {
+                                                    habitsCollapsed = true
+                                                }
+                                            }
+                                        } else if value.translation.height > verticalThreshold {
+                                            // Swipe down - expand habits
+                                            if habitsCollapsed {
+                                                withAnimation(.easeInOut(duration: 0.3)) {
+                                                    habitsCollapsed = false
+                                                }
                                             }
                                         }
-                                    } else if value.translation.width < -threshold {
-                                        // Swipe left - go to next tab
-                                        if selectedTab == "overview" {
-                                            withAnimation(.easeInOut(duration: 0.3)) {
-                                                selectedTab = "grid"
+                                    } else {
+                                        // Horizontal swipe - handle tab switching
+                                        if value.translation.width > horizontalThreshold {
+                                            // Swipe right - go to previous tab
+                                            if selectedTab == "grid" {
+                                                withAnimation(.easeInOut(duration: 0.3)) {
+                                                    selectedTab = "overview"
+                                                }
+                                            }
+                                        } else if value.translation.width < -horizontalThreshold {
+                                            // Swipe left - go to next tab
+                                            if selectedTab == "overview" {
+                                                withAnimation(.easeInOut(duration: 0.3)) {
+                                                    selectedTab = "grid"
+                                                }
                                             }
                                         }
                                     }
@@ -218,11 +242,25 @@ struct HabitDashboardView: View {
             .onChange(of: greetingCollapsed) { newValue in
                 UserDefaults.standard.set(newValue, forKey: "greetingCollapsed")
             }
-            .task { await habitManager.loadHabits() }
-            .onChange(of: authManager.isAuthenticated) { isAuthed in
-                if isAuthed { Task { await habitManager.loadHabits() } }
+            .task { 
+                await habitManager.loadHabits()
+                // Preload habit capture images after habits are loaded
+                imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
-            .refreshable { await habitManager.loadHabits() }
+            .onChange(of: authManager.isAuthenticated) { isAuthed in
+                if isAuthed { 
+                    Task { 
+                        await habitManager.loadHabits()
+                        // Preload habit capture images after habits are loaded
+                        imagePreloader.preloadHabitCaptures(habitManager.captures)
+                    } 
+                }
+            }
+            .refreshable { 
+                await habitManager.loadHabits()
+                // Preload habit capture images after habits are loaded
+                imagePreloader.preloadHabitCaptures(habitManager.captures)
+            }
             .sheet(isPresented: $showingHabitPicker) { HabitPickerView(selectedHabit: $tempSelectedHabit) }
             .onChange(of: habitManager.habits) { _ in
                 // Update stats when habits change
@@ -230,6 +268,9 @@ struct HabitDashboardView: View {
                 animatedTotalStreak = totalStreak
                 animatedLongestStreak = longestStreak
                 animatedTodayPercent = todayPercent
+                
+                // Preload habit capture images when habits change
+                imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
             .onChange(of: habitManager.totalStreakSum) { _ in
                 // Update stats when computed stats change

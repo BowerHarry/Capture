@@ -3,6 +3,7 @@ import SwiftUI
 struct DiscoveryView: View {
     @EnvironmentObject var habitManager: HabitManager
     @EnvironmentObject var authManager: AuthManager
+    @StateObject private var imagePreloader = ImagePreloader.shared
     @State private var searchQuery = ""
     @State private var isLoading = false
     @State private var selectedTab = 0 // 0: Trending, 1: Habits, 2: Users
@@ -135,6 +136,9 @@ struct DiscoveryView: View {
         await habitManager.loadPopularHabits()
         await loadAllHabits()
         await loadAllUsers()
+        
+        // Preload images after data is loaded
+        preloadDiscoveryImages()
     }
     
     private func loadAllHabits() async {
@@ -179,6 +183,9 @@ struct DiscoveryView: View {
                     (user.username.localizedCaseInsensitiveContains(query) ||
                      (user.bio?.localizedCaseInsensitiveContains(query) ?? false))
                 }
+                
+                // Preload avatars for filtered users
+                imagePreloader.preloadUserAvatars(for: filteredUsers)
             }
         }
     }
@@ -197,12 +204,29 @@ struct DiscoveryView: View {
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
+    
+    private func preloadDiscoveryImages() {
+        // Preload popular habit capture images
+        let allCaptures = habitManager.popularHabits.compactMap { habit in
+            habit.captures
+        }.flatMap { $0 }
+        imagePreloader.preloadImages(for: allCaptures)
+        
+        // Preload user avatars
+        imagePreloader.preloadUserAvatars(for: allUsers)
+        
+        // Preload filtered user avatars if they exist
+        if !filteredUsers.isEmpty {
+            imagePreloader.preloadUserAvatars(for: filteredUsers)
+        }
+    }
 }
 
 // MARK: - Tab Content Views
 
 struct TrendingTabContent: View {
     @EnvironmentObject var habitManager: HabitManager
+    @StateObject private var imagePreloader = ImagePreloader.shared
     let searchQuery: String
     let onSearchQueryChange: (String) -> Void
     
@@ -231,6 +255,22 @@ struct TrendingTabContent: View {
                 CommunityStatsCard(stats: habitManager.communityStats)
             }
         }
+        .onAppear {
+            // Preload images for trending habits
+            preloadTrendingImages()
+        }
+        .task {
+            // Ensure images are preloaded when the view appears
+            preloadTrendingImages()
+        }
+    }
+    
+    private func preloadTrendingImages() {
+        // Preload habit capture images from popular habits
+        let allCaptures = habitManager.popularHabits.compactMap { habit in
+            habit.captures
+        }.flatMap { $0 }
+        imagePreloader.preloadImages(for: allCaptures)
     }
     
     private var filteredHabits: [PopularHabit] {
@@ -371,21 +411,7 @@ struct UserListItem: View {
                 showingUserProfile = true
             }) {
                 HStack(spacing: 16) {
-                    AsyncImage(url: URL(string: user.avatar ?? "")) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Circle()
-                            .fill(Color.gray.opacity(0.3))
-                            .overlay(
-                                Image(systemName: "person.fill")
-                                    .font(.title2)
-                                    .foregroundColor(.gray)
-                            )
-                    }
-                    .frame(width: 48, height: 48)
-                    .clipShape(Circle())
+                    PreloadableAvatarView(user: user, size: 48)
                     
                     VStack(alignment: .leading, spacing: 4) {
                         Text(user.username)
@@ -713,7 +739,7 @@ struct HabitPhotoGrid: View {
                 )
         } else if photosToShow.count == 1 {
             // Single photo
-            AsyncImage(url: URL(string: photosToShow[0])) { image in
+            PreloadableAsyncImage(url: photosToShow[0]) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -729,7 +755,7 @@ struct HabitPhotoGrid: View {
                 GridItem(.flexible(), spacing: 1)
             ], spacing: 1) {
                 ForEach(photosToShow, id: \.self) { photoUrl in
-                    AsyncImage(url: URL(string: photoUrl)) { image in
+                    PreloadableAsyncImage(url: photoUrl) { image in
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)

@@ -30,6 +30,10 @@ struct MainTabView: View {
     @State private var selectedHabitId: UUID?
     @State private var showingDebugPanel = false
     @State private var isKeyboardVisible = false
+    @StateObject private var imagePreloader = ImagePreloader.shared
+    @EnvironmentObject var habitManager: HabitManager
+    @EnvironmentObject var socialManager: SocialManager
+    @EnvironmentObject var authManager: AuthManager
     
     var body: some View {
         ZStack {
@@ -72,13 +76,44 @@ struct MainTabView: View {
                 VStack {
                     Spacer()
                     CustomTabBar(selectedTab: $selectedTab)
-                        .frame(maxWidth: UIScreen.main.bounds.width * 0.5)
+                        .frame(maxWidth: UIScreen.main.bounds.width * 0.75)
                         .padding(.bottom, 10)
+                        .gesture(
+                            DragGesture()
+                                .onEnded { value in
+                                    let threshold: CGFloat = 50
+                                    if value.translation.width > threshold {
+                                        // Swipe right - go to previous tab
+                                        withAnimation(.easeInOut(duration: 0.3)) {
+                                            selectedTab = max(0, selectedTab - 1)
+                                        }
+                                    } else if value.translation.width < -threshold {
+                                        // Swipe left - go to next tab
+                                        withAnimation(.easeInOut(duration: 0.3)) {
+                                            selectedTab = min(4, selectedTab + 1)
+                                        }
+                                    }
+                                }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: isKeyboardVisible)
                 }
                 .allowsHitTesting(true)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Preload images for all tabs when the app loads
+            Task {
+                await preloadImagesForAllTabs()
+            }
+        }
+        .onChange(of: selectedTab) { newTab in
+            // Preload images for the tab that's about to be selected
+            Task {
+                await preloadImagesForTab(newTab)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeInOut(duration: 0.3)) {
                 isKeyboardVisible = true
@@ -90,10 +125,77 @@ struct MainTabView: View {
             }
         }
     }
+    
+    // MARK: - Image Preloading Functions
+    
+    private func preloadImagesForAllTabs() async {
+        // Preload user avatar
+        if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+            imagePreloader.preloadImageSync(url: avatar)
+        }
+        
+        // Preload habit captures
+        imagePreloader.preloadHabitCaptures(habitManager.captures)
+        
+        // Preload discovery images in background
+        await preloadDiscoveryImages()
+        
+        // Preload social feed images (if available)
+        // This will be called when social data is loaded
+    }
+    
+    private func preloadImagesForTab(_ tab: Int) async {
+        switch tab {
+        case 0: // Dashboard
+            // Preload habit captures and user avatars
+            imagePreloader.preloadHabitCaptures(habitManager.captures)
+            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+                imagePreloader.preloadImageSync(url: avatar)
+            }
+            
+        case 1: // Social Feed
+            // Preload social feed images and user avatars
+            // This will be called when social data is loaded
+            break
+            
+        case 3: // Discovery
+            // Preload popular habit images and user avatars
+            await preloadDiscoveryImages()
+            break
+            
+        case 4: // Profile
+            // Preload user avatar and habit captures
+            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+                imagePreloader.preloadImageSync(url: avatar)
+            }
+            imagePreloader.preloadHabitCaptures(habitManager.captures)
+            
+        default:
+            break
+        }
+    }
+    
+    private func preloadDiscoveryImages() async {
+        // Load discovery data if not already loaded
+        await habitManager.loadPopularHabits()
+        
+        // Preload popular habit capture images
+        let allCaptures = habitManager.popularHabits.compactMap { habit in
+            habit.captures
+        }.flatMap { $0 }
+        imagePreloader.preloadImages(for: allCaptures)
+        
+        // Load and preload user avatars
+        let allUsers = await habitManager.getAllUsers()
+        imagePreloader.preloadUserAvatars(for: allUsers)
+    }
 }
 
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
+    @StateObject private var imagePreloader = ImagePreloader.shared
+    @EnvironmentObject var habitManager: HabitManager
+    @EnvironmentObject var authManager: AuthManager
     
     private let tabs = [
         TabItem(icon: "house", title: "Home", tag: 0, gradient: [Color.blue, Color.purple], isSpecial: false),
@@ -115,8 +217,8 @@ struct CustomTabBar: View {
                 )
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
@@ -137,16 +239,25 @@ struct TabButtonView: View {
     let tab: TabItem
     let isSelected: Bool
     let onTap: () -> Void
+    @StateObject private var imagePreloader = ImagePreloader.shared
+    @EnvironmentObject var habitManager: HabitManager
+    @EnvironmentObject var authManager: AuthManager
     
     var body: some View {
-        Button(action: onTap) {
+        Button(action: {
+            // Preload images for the tab being tapped
+            Task {
+                await preloadImagesForTab(tab.tag)
+            }
+            onTap()
+        }) {
             VStack(spacing: 0) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundColor(isSelected ? .white : .secondary)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
-            .padding(8)
+            .padding(4)
             .background(
                 isSelected ?
                 AnyShapeStyle(
@@ -157,12 +268,58 @@ struct TabButtonView: View {
                     )
                 ) : AnyShapeStyle(Color.clear)
             )
-            .cornerRadius(12)
-            .scaleEffect(isSelected ? 1.0 : 0.9)
-            .animation(.easeInOut(duration: 0.2), value: isSelected)
+            .cornerRadius(18)
+            .scaleEffect(isSelected ? 1.05 : 0.95)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
         }
         .buttonStyle(PlainButtonStyle())
         .frame(minWidth: 0, maxWidth: .infinity)
+    }
+    
+    private func preloadImagesForTab(_ tab: Int) async {
+        switch tab {
+        case 0: // Dashboard
+            // Preload habit captures and user avatars
+            imagePreloader.preloadHabitCaptures(habitManager.captures)
+            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+                imagePreloader.preloadImageSync(url: avatar)
+            }
+            
+        case 1: // Social Feed
+            // Preload social feed images and user avatars
+            // This will be called when social data is loaded
+            break
+            
+        case 3: // Discovery
+            // Preload popular habit images and user avatars
+            await preloadDiscoveryImages()
+            break
+            
+        case 4: // Profile
+            // Preload user avatar and habit captures
+            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+                imagePreloader.preloadImageSync(url: avatar)
+            }
+            imagePreloader.preloadHabitCaptures(habitManager.captures)
+            
+        default:
+            break
+        }
+    }
+    
+    private func preloadDiscoveryImages() async {
+        // Load discovery data if not already loaded
+        await habitManager.loadPopularHabits()
+        
+        // Preload popular habit capture images
+        let allCaptures = habitManager.popularHabits.compactMap { habit in
+            habit.captures
+        }.flatMap { $0 }
+        imagePreloader.preloadImages(for: allCaptures)
+        
+        // Load and preload user avatars
+        let allUsers = await habitManager.getAllUsers()
+        imagePreloader.preloadUserAvatars(for: allUsers)
     }
 }
 
