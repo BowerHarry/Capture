@@ -133,6 +133,7 @@ struct DiscoveryView: View {
 
     
     private func loadInitialData() async {
+        await habitManager.loadTrendingHabits()
         await habitManager.loadPopularHabits()
         await loadAllHabits()
         await loadAllUsers()
@@ -206,11 +207,17 @@ struct DiscoveryView: View {
     }
     
     private func preloadDiscoveryImages() {
+        // Preload trending thumbnails with caching
+        let trendingCaptures = habitManager.trendingCaptures.compactMap { $0.imageUrl }
+        if !trendingCaptures.isEmpty {
+            imagePreloader.preloadTrendingThumbnails(for: trendingCaptures, size: CGSize(width: 64, height: 64))
+        }
+        
         // Preload popular habit capture images
-        let allCaptures = habitManager.popularHabits.compactMap { habit in
+        let popularCaptures = habitManager.popularHabits.compactMap { habit in
             habit.captures
         }.flatMap { $0 }
-        imagePreloader.preloadImages(for: allCaptures)
+        imagePreloader.preloadImages(for: popularCaptures)
         
         // Preload user avatars
         imagePreloader.preloadUserAvatars(for: allUsers)
@@ -241,13 +248,14 @@ struct TrendingTabContent: View {
             
             // Trending Habits
             TrendingHabitsSection(
-                habits: filteredHabits,
+                habits: filteredTrendingHabits,
                 searchQuery: searchQuery,
                 onCaptureHabit: { habit in
                     Task {
                         await habitManager.createHabitFromDiscovery(name: habit.name, category: habit.category)
                     }
-                }
+                },
+                habitManager: habitManager
             )
             
             // Community Stats
@@ -266,18 +274,18 @@ struct TrendingTabContent: View {
     }
     
     private func preloadTrendingImages() {
-        // Preload habit capture images from popular habits
-        let allCaptures = habitManager.popularHabits.compactMap { habit in
-            habit.captures
-        }.flatMap { $0 }
-        imagePreloader.preloadImages(for: allCaptures)
+        // Preload trending thumbnails with caching
+        let allCaptures = habitManager.trendingCaptures.compactMap { $0.imageUrl }
+        if !allCaptures.isEmpty {
+            imagePreloader.preloadTrendingThumbnails(for: allCaptures, size: CGSize(width: 64, height: 64))
+        }
     }
     
-    private var filteredHabits: [PopularHabit] {
+    private var filteredTrendingHabits: [TrendingHabit] {
         if searchQuery.isEmpty {
-            return habitManager.popularHabits
+            return habitManager.trendingHabits
         } else {
-            return habitManager.popularHabits.filter { habit in
+            return habitManager.trendingHabits.filter { habit in
                 habit.name.localizedCaseInsensitiveContains(searchQuery) ||
                 habit.category.localizedCaseInsensitiveContains(searchQuery)
             }
@@ -597,9 +605,10 @@ struct CategoryBadge: View {
 // MARK: - Trending Habits Section
 
 struct TrendingHabitsSection: View {
-    let habits: [PopularHabit]
+    let habits: [TrendingHabit]
     let searchQuery: String
-    let onCaptureHabit: (PopularHabit) -> Void
+    let onCaptureHabit: (TrendingHabit) -> Void
+    @ObservedObject var habitManager: HabitManager
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -614,10 +623,11 @@ struct TrendingHabitsSection: View {
                     ForEach(habits) { habit in
                         DiscoveryHabitCard(
                             habit: habit,
-                            onCapture: {
-                                onCaptureHabit(habit)
-                            }
+                            habitManager: habitManager
                         )
+                        .onTapGesture {
+                            onCaptureHabit(habit)
+                        }
                     }
                 }
             }
@@ -634,79 +644,57 @@ struct TrendingHabitsSection: View {
 }
 
 struct DiscoveryHabitCard: View {
-    let habit: PopularHabit
-    let onCapture: () -> Void
+    let habit: TrendingHabit
+    @ObservedObject var habitManager: HabitManager
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                // Photo Grid
-                HabitPhotoGrid(captures: habit.captures ?? [], habitName: habit.name)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(habit.name)
-                                .font(.headline)
-                                .fontWeight(.medium)
-                            
-                            Text(habit.category)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .frame(height: 24)
-                                .background(Color.blue.opacity(0.1))
-                                .foregroundColor(.blue)
-                                .cornerRadius(6)
-                        }
-                        
-                        Spacer()
-                        
-                        Button(action: onCapture) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "camera")
-                                    .font(.system(size: 12))
-                                Text("Capture")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.clear)
-                            .foregroundColor(.black)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.black, lineWidth: 1)
-                            )
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(habit.name)
+                        .font(.headline)
+                        .fontWeight(.semibold)
                     
-                    Text(habit.description)
+                    Text(habit.description ?? "")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .lineLimit(2)
-                    
-                    HStack(spacing: 16) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "person.2")
-                                .font(.system(size: 14))
-                            Text("\(habit.participants) participant\(habit.participants == 1 ? "" : "s")")
-                                .font(.caption)
-                        }
-                        
-                        if habit.totalStreak > 0 {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chart.line.uptrend.xyaxis")
-                                    .font(.system(size: 14))
-                                Text("\(Int(round(Double(habit.totalStreak) / Double(habit.participants)))) avg streak")
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                    .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Photo grid
+                let trendingCaptures = habitManager.getTrendingCaptures(for: habit.id)
+                let captureUrls = trendingCaptures.compactMap { $0.imageUrl }
+                
+                let _ = NSLog("[DiscoveryHabitCard] habit: %@, trendingCaptures count: %d, captureUrls count: %d", habit.name, trendingCaptures.count, captureUrls.count)
+                
+                HabitPhotoGrid(captures: captureUrls, habitName: habit.name)
+            }
+            
+            HStack(spacing: 16) {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 14))
+                    Text("\(habit.participants) participant\(habit.participants == 1 ? "" : "s")")
+                        .font(.caption)
+                }
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "flame")
+                        .font(.system(size: 14))
+                    Text("\(String(format: "%.1f", habit.avgStreak)) avg streak")
+                        .font(.caption)
+                }
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "camera")
+                        .font(.system(size: 14))
+                    Text("\(habit.totalCaptures) captures")
+                        .font(.caption)
                 }
             }
+            .foregroundColor(.secondary)
         }
         .padding(16)
         .background(Color(.systemBackground))
@@ -720,55 +708,154 @@ struct HabitPhotoGrid: View {
     let habitName: String
     
     var body: some View {
-        let photosToShow = captures.count >= 4 ? Array(captures.prefix(4)) : (captures.isEmpty ? [] : Array(captures.prefix(1)))
-        
-        if photosToShow.isEmpty {
-            // Placeholder
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.gray.opacity(0.1), Color.gray.opacity(0.2)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 64, height: 64)
-                .overlay(
-                    Text("📸")
-                        .font(.title2)
-                )
-        } else if photosToShow.count == 1 {
-            // Single photo
-            PreloadableAsyncImage(url: photosToShow[0]) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.gray.opacity(0.3)
-            }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        } else {
-            // 2x2 grid
-            LazyVGrid(columns: [
-                GridItem(.flexible(), spacing: 1),
-                GridItem(.flexible(), spacing: 1)
-            ], spacing: 1) {
-                ForEach(photosToShow, id: \.self) { photoUrl in
-                    PreloadableAsyncImage(url: photoUrl) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Color.gray.opacity(0.3)
-                    }
-                    .frame(width: 31, height: 31)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+        Group {
+            let validCaptures = captures.compactMap { item -> String? in
+                if let string = item as? String {
+                    return string
+                } else {
+                    NSLog("[HabitPhotoGrid] Warning: non-string item in captures array: %@", String(describing: item))
+                    return nil
                 }
             }
-            .frame(width: 64, height: 64)
-            .background(Color.gray.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            
+            let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : validCaptures
+            
+            let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, captures.count, validCaptures.count, photosToShow.count)
+            
+            if photosToShow.isEmpty {
+                // Placeholder
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.gray.opacity(0.1), Color.gray.opacity(0.2)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 64, height: 64)
+                    .overlay(
+                        Text("📸")
+                            .font(.title2)
+                    )
+            } else if photosToShow.count == 1 {
+                // Single photo - use trending thumbnail with caching
+                TrendingThumbnailAsyncImage(imageUrl: photosToShow[0], size: CGSize(width: 64, height: 64)) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.gray.opacity(0.3)
+                }
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                // 2x2 grid - use trending thumbnails with caching
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 1),
+                    GridItem(.flexible(), spacing: 1)
+                ], spacing: 1) {
+                    ForEach(photosToShow, id: \.self) { photoUrl in
+                        TrendingThumbnailAsyncImage(imageUrl: photoUrl, size: CGSize(width: 31, height: 31)) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Color.gray.opacity(0.3)
+                        }
+                        .frame(width: 31, height: 31)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .frame(width: 64, height: 64)
+                .background(Color.gray.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+}
+
+// MARK: - Thumbnail Async Image Component
+
+struct ThumbnailAsyncImage<Content: View, Placeholder: View>: View {
+    let url: String
+    let size: CGSize
+    let content: (Image) -> Content
+    let placeholder: () -> Placeholder
+    
+    @StateObject private var imagePreloader = ImagePreloader.shared
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    
+    init(url: String, size: CGSize, @ViewBuilder content: @escaping (Image) -> Content, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        self.url = url
+        self.size = size
+        self.content = content
+        self.placeholder = placeholder
+    }
+    
+    var body: some View {
+        Group {
+            if let image = image {
+                content(Image(uiImage: image))
+            } else {
+                placeholder()
+            }
+        }
+        .onAppear {
+            loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() {
+        Task {
+            if let thumbnail = await imagePreloader.getTrendingThumbnail(for: url, size: size) {
+                await MainActor.run {
+                    self.image = thumbnail
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+}
+
+struct TrendingThumbnailAsyncImage<Content: View, Placeholder: View>: View {
+    let imageUrl: String
+    let size: CGSize
+    let content: (Image) -> Content
+    let placeholder: () -> Placeholder
+    
+    @StateObject private var imagePreloader = ImagePreloader.shared
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    
+    init(imageUrl: String, size: CGSize, @ViewBuilder content: @escaping (Image) -> Content, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        self.imageUrl = imageUrl
+        self.size = size
+        self.content = content
+        self.placeholder = placeholder
+    }
+    
+    var body: some View {
+        Group {
+            if let image = image {
+                content(Image(uiImage: image))
+            } else {
+                placeholder()
+            }
+        }
+        .onAppear {
+            loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() {
+        Task {
+            if let thumbnail = await imagePreloader.getTrendingThumbnail(for: imageUrl, size: size) {
+                await MainActor.run {
+                    self.image = thumbnail
+                    self.isLoading = false
+                }
+            }
         }
     }
 }

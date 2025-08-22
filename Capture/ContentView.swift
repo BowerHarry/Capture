@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var habitManager: HabitManager
+    @StateObject private var imagePreloader = ImagePreloader.shared
     
     var body: some View {
         Group {
@@ -14,12 +15,20 @@ struct ContentView: View {
         }
         .onAppear {
             if authManager.isAuthenticated {
-                Task { await habitManager.loadHabits() }
+                Task { 
+                    await habitManager.loadAppData()
+                    
+                    // Start preloading trending thumbnails immediately after app data is loaded
+                    let trendingURLs = habitManager.trendingCaptures.compactMap { $0.imageUrl }
+                    if !trendingURLs.isEmpty {
+                        imagePreloader.preloadTrendingThumbnails(for: trendingURLs, size: CGSize(width: 64, height: 64))
+                    }
+                }
             }
         }
         .onChange(of: authManager.isAuthenticated) { isAuthed in
             if isAuthed {
-                Task { await habitManager.loadHabits() }
+                Task { await habitManager.loadAppData() }
             }
         }
     }
@@ -34,6 +43,9 @@ struct MainTabView: View {
     @EnvironmentObject var habitManager: HabitManager
     @EnvironmentObject var socialManager: SocialManager
     @EnvironmentObject var authManager: AuthManager
+    
+    // Private properties for preventing duplicate calls
+    @State private var lastPreloadTime: Date = Date.distantPast
     
     var body: some View {
         ZStack {
@@ -176,14 +188,32 @@ struct MainTabView: View {
     }
     
     private func preloadDiscoveryImages() async {
-        // Load discovery data if not already loaded
-        await habitManager.loadPopularHabits()
+        // Only preload if we haven't already done so recently
+        let now = Date()
+        
+        // Only preload if it's been more than 30 seconds since last preload
+        guard now.timeIntervalSince(lastPreloadTime) > 30 else {
+            print("🖼️ Skipping preload - too soon since last preload")
+            return
+        }
+        
+        lastPreloadTime = now
+        
+        // Load all discovery data if not already loaded
+        if habitManager.trendingHabits.isEmpty {
+            await habitManager.loadTrendingHabits()
+        }
+        if habitManager.popularHabits.isEmpty {
+            await habitManager.loadPopularHabits()
+        }
+        
+        // No longer preloading trending captures - they're loaded on-demand without caching
         
         // Preload popular habit capture images
-        let allCaptures = habitManager.popularHabits.compactMap { habit in
+        let popularCaptures = habitManager.popularHabits.compactMap { habit in
             habit.captures
         }.flatMap { $0 }
-        imagePreloader.preloadImages(for: allCaptures)
+        imagePreloader.preloadImages(for: popularCaptures)
         
         // Load and preload user avatars
         let allUsers = await habitManager.getAllUsers()
@@ -308,14 +338,24 @@ struct TabButtonView: View {
     }
     
     private func preloadDiscoveryImages() async {
-        // Load discovery data if not already loaded
-        await habitManager.loadPopularHabits()
+        // Load all app data at startup if not already loaded
+        if habitManager.habits.isEmpty {
+            await habitManager.loadAppData()
+        }
         
-        // Preload popular habit capture images
-        let allCaptures = habitManager.popularHabits.compactMap { habit in
+        // Preload trending thumbnails with caching
+        let trendingURLs = habitManager.trendingCaptures.compactMap { $0.imageUrl }
+        if !trendingURLs.isEmpty {
+            imagePreloader.preloadTrendingThumbnails(for: trendingURLs, size: CGSize(width: 64, height: 64))
+        }
+        
+        // Preload popular habit capture images (only if not already preloaded)
+        let popularCaptures = habitManager.popularHabits.compactMap { habit in
             habit.captures
         }.flatMap { $0 }
-        imagePreloader.preloadImages(for: allCaptures)
+        if !popularCaptures.isEmpty {
+            imagePreloader.preloadImages(for: popularCaptures)
+        }
         
         // Load and preload user avatars
         let allUsers = await habitManager.getAllUsers()

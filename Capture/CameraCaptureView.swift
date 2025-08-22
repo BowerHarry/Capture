@@ -126,7 +126,13 @@ struct CameraCaptureView: View {
     private func saveImage(_ image: UIImage) async {
         guard let habitIdString = preselectedHabitId,
               let habitId = UUID(uuidString: habitIdString),
-              let data = image.jpegData(compressionQuality: 0.85) else { return }
+              let data = image.jpegData(compressionQuality: 0.85) else { 
+            NSLog("[CameraCaptureView] saveImage: ERROR - Failed to prepare image data or habitId")
+            return 
+        }
+        
+        NSLog("[CameraCaptureView] saveImage: starting capture save for habitId=%@", habitId.uuidString)
+        NSLog("[CameraCaptureView] saveImage: image data size=%d bytes, isPublic=%@", data.count, String(isPublic))
         
         isSaving = true
         defer { isSaving = false }
@@ -139,7 +145,10 @@ struct CameraCaptureView: View {
         )
         
         if habitManager.errorMessage == nil {
+            NSLog("[CameraCaptureView] saveImage: capture saved successfully")
             onBack()
+        } else {
+            NSLog("[CameraCaptureView] saveImage: ERROR - %@", habitManager.errorMessage ?? "Unknown error")
         }
     }
 }

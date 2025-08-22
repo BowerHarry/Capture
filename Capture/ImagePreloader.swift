@@ -12,6 +12,10 @@ class ImagePreloader: ObservableObject {
     private let queue = DispatchQueue(label: "com.capture.imagepreloader", attributes: .concurrent)
     private let lockQueue = DispatchQueue(label: "com.capture.imagepreloader.lock")
     
+    // Trending thumbnail specific cache
+    private var trendingThumbnailCache: [String: UIImage] = [:]
+    private var trendingThumbnailLoadingTasks: [String: Task<Void, Never>] = [:]
+    
     init() {
         // Configure cache
         cache.countLimit = 100 // Maximum number of images to cache
@@ -158,6 +162,159 @@ class ImagePreloader: ObservableObject {
     func preloadSocialFeedImages(for posts: [SocialPost]) {
         let imageURLs = posts.compactMap { $0.imageUrl }.filter { !$0.isEmpty }
         preloadImages(for: imageURLs)
+    }
+}
+
+// MARK: - Trending Thumbnail Methods
+
+extension ImagePreloader {
+    
+    // Preload trending thumbnails for a list of URLs
+    func preloadTrendingThumbnails(for urls: [String], size: CGSize) {
+        Task {
+            for url in urls {
+                _ = await getTrendingThumbnail(for: url, size: size)
+            }
+        }
+    }
+    
+    // Get trending thumbnail with caching (non-blocking)
+    func getTrendingThumbnail(for url: String, size: CGSize) async -> UIImage? {
+        guard !url.isEmpty else { return nil }
+        
+        // Normalize URL
+        let normalizedURL = normalizeTrendingURL(url)
+        
+        // Check cache first
+        if let cached = getCachedTrendingThumbnail(for: normalizedURL) {
+            NSLog("[ImagePreloader] getTrendingThumbnail: found cached thumbnail for %@", normalizedURL)
+            return cached
+        }
+        
+        // Check if already loading - use lock to prevent race conditions
+        return await lockQueue.sync {
+            if trendingThumbnailLoadingTasks[normalizedURL] != nil {
+                NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
+                // Return nil immediately - don't wait to prevent blocking
+                return nil
+            }
+            
+            NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
+            
+            // Start loading
+            let task = Task {
+                await loadTrendingThumbnail(url: normalizedURL, size: size)
+            }
+            trendingThumbnailLoadingTasks[normalizedURL] = task
+            
+            // Return nil immediately - the image will be cached when ready
+            return nil
+        }
+    }
+    
+    private func getCachedTrendingThumbnail(for url: String) -> UIImage? {
+        return lockQueue.sync {
+            return trendingThumbnailCache[url]
+        }
+    }
+    
+    private func setCachedTrendingThumbnail(_ image: UIImage, for url: String) {
+        lockQueue.sync {
+            trendingThumbnailCache[url] = image
+        }
+    }
+    
+    private func waitForTrendingThumbnailLoad(_ url: String) async {
+        // Poll for up to 5 seconds (100 attempts * 50ms)
+        for _ in 0..<100 {
+            if getCachedTrendingThumbnail(for: url) != nil {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+    }
+    
+    private func loadTrendingThumbnail(url: String, size: CGSize) async {
+        guard let imageURL = URL(string: url) else {
+            NSLog("[ImagePreloader] loadTrendingThumbnail: invalid URL %@", url)
+            return
+        }
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(from: imageURL)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                NSLog("[ImagePreloader] loadTrendingThumbnail: HTTP %d for %@", httpResponse.statusCode, url)
+            }
+            
+            guard let originalImage = UIImage(data: data) else {
+                NSLog("[ImagePreloader] loadTrendingThumbnail: failed to create image from data for %@", url)
+                return
+            }
+            
+            // Create thumbnail
+            let thumbnail = await createThumbnail(from: originalImage, size: size)
+            
+            // Cache the thumbnail
+            setCachedTrendingThumbnail(thumbnail, for: url)
+            
+            // Clean up loading task
+            lockQueue.sync {
+                trendingThumbnailLoadingTasks.removeValue(forKey: url)
+            }
+            
+            NSLog("[ImagePreloader] loadTrendingThumbnail: successfully cached thumbnail for %@", url)
+            
+        } catch {
+            NSLog("[ImagePreloader] loadTrendingThumbnail: error loading %@: %@", url, error.localizedDescription)
+            
+            // Clean up loading task
+            lockQueue.sync {
+                trendingThumbnailLoadingTasks.removeValue(forKey: url)
+            }
+        }
+    }
+    
+    private func createThumbnail(from image: UIImage, size: CGSize) async -> UIImage {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let renderer = UIGraphicsImageRenderer(size: size)
+                let thumbnail = renderer.image { context in
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                }
+                continuation.resume(returning: thumbnail)
+            }
+        }
+    }
+    
+    private func normalizeTrendingURL(_ urlString: String) -> String {
+        // If URL already has a scheme, return as is
+        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
+            return urlString
+        }
+        
+        // If it looks like a Supabase storage URL (contains /storage/), add https://
+        if urlString.contains("/storage/") {
+            return "https://" + urlString
+        }
+        
+        // If it looks like a relative path or filename, it might be a Supabase storage path
+        // Add the Supabase storage base URL for captures_public bucket
+        if !urlString.contains("://") && !urlString.hasPrefix("/") {
+            // This looks like a relative path, add the Supabase storage base URL for captures_public
+            return "https://your-project-ref.supabase.co/storage/v1/object/public/captures_public/" + urlString
+        }
+        
+        // Default to adding https://
+        return "https://" + urlString
+    }
+    
+    // Clear trending thumbnail cache
+    func clearTrendingThumbnailCache() {
+        lockQueue.sync {
+            trendingThumbnailCache.removeAll()
+            trendingThumbnailLoadingTasks.removeAll()
+        }
     }
 }
 
