@@ -192,16 +192,90 @@ class SupabaseManager {
         NSLog("[SupabaseManager] getHabits: fetching habits for user %@", currentUser.id.uuidString)
         
         do {
-            let rows: [Habit] = try await client.database
-                .from("habits")
+            NSLog("[SupabaseManager] getHabits: starting to fetch user habits...")
+            
+            // Get user habits using the new decoupled schema
+            let userHabits: [UserHabit] = try await client.database
+                .from("user_habits")
                 .select()
                 .eq("user_id", value: currentUser.id)
+                .eq("is_active", value: true)
                 .order("created_at", ascending: false)
                 .execute()
                 .value
             
-            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits", rows.count)
-            return rows
+            NSLog("[SupabaseManager] getHabits: successfully fetched %d user habits", userHabits.count)
+            
+            // Convert to legacy Habit format for backward compatibility
+            var habits: [Habit] = []
+            
+            for (index, userHabit) in userHabits.enumerated() {
+                NSLog("[SupabaseManager] getHabits: processing user habit %d/%d: %@", index + 1, userHabits.count, userHabit.id.uuidString)
+                
+                do {
+                    NSLog("[SupabaseManager] getHabits: fetching template for habit %@", userHabit.habitTemplateId.uuidString)
+                    
+                    let templateRows: [HabitTemplate] = try await client.database
+                        .from("habit_templates")
+                        .select()
+                        .eq("id", value: userHabit.habitTemplateId)
+                        .limit(1)
+                        .execute()
+                        .value
+                    
+                    NSLog("[SupabaseManager] getHabits: found %d templates for habit %@", templateRows.count, userHabit.id.uuidString)
+                    
+                    guard let template = templateRows.first else {
+                        NSLog("[SupabaseManager] getHabits: template not found for habit %@", userHabit.id.uuidString)
+                        continue
+                    }
+                    
+                    NSLog("[SupabaseManager] getHabits: creating Habit object for %@ with template %@", userHabit.id.uuidString, template.name)
+                    
+                    let habit = Habit(
+                        id: userHabit.id,
+                        name: template.name,
+                        icon: nil, // HabitTemplate doesn't have icon
+                        color: nil, // HabitTemplate doesn't have color
+                        category: template.category,
+                        target: template.targetCount ?? 1,
+                        targetFrequency: template.targetFrequency,
+                        targetCount: template.targetCount,
+                        currentStreak: userHabit.currentStreak,
+                        longestStreak: 0,
+                        isActive: userHabit.isActive,
+                        createdAt: userHabit.createdAt,
+                        updatedAt: userHabit.updatedAt,
+                        userId: userHabit.userId
+                    )
+                    
+                    NSLog("[SupabaseManager] getHabits: successfully created Habit object: %@", habit.name)
+                    habits.append(habit)
+                    
+                } catch {
+                    NSLog("[SupabaseManager] getHabits: error fetching template for habit %@: %@", userHabit.id.uuidString, error.localizedDescription)
+                    
+                    // Add detailed error logging
+                    if let decodingError = error as? DecodingError {
+                        switch decodingError {
+                        case .keyNotFound(let key, let context):
+                            NSLog("[SupabaseManager] getHabits: missing key '%@' at path %@", key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                        case .typeMismatch(let type, let context):
+                            NSLog("[SupabaseManager] getHabits: type mismatch for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                        case .valueNotFound(let type, let context):
+                            NSLog("[SupabaseManager] getHabits: value not found for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                        case .dataCorrupted(let context):
+                            NSLog("[SupabaseManager] getHabits: data corrupted at path %@: %@", context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                        @unknown default:
+                            NSLog("[SupabaseManager] getHabits: unknown decoding error")
+                        }
+                    }
+                    continue
+                }
+            }
+            
+            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits", habits.count)
+            return habits
         } catch {
             NSLog("[SupabaseManager] getHabits: error %@", error.localizedDescription)
             if let decodingError = error as? DecodingError {
@@ -236,16 +310,78 @@ class SupabaseManager {
         NSLog("[SupabaseManager] getHabits: fetching habits for user %@", userId.uuidString)
         
         do {
-            let rows: [Habit] = try await client.database
-                .from("habits")
-                .select()
+            // Get user habits with their templates using the new decoupled schema
+            let rows: [UserHabit] = try await client.database
+                .from("user_habits")
+                .select("""
+                    id,
+                    user_id,
+                    habit_template_id,
+                    current_streak,
+                    is_active,
+                    created_at,
+                    updated_at,
+                    habit_templates!inner(
+                        id,
+                        name,
+                        description,
+                        category,
+                        target_frequency,
+                        target_count,
+                        is_active,
+                        created_at,
+                        updated_at
+                    )
+                """)
                 .eq("user_id", value: userId)
+                .eq("is_active", value: true)
                 .order("created_at", ascending: false)
                 .execute()
                 .value
             
-            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits", rows.count)
-            return rows
+            // Convert to legacy Habit format for backward compatibility
+            var habits: [Habit] = []
+            
+            for userHabit in rows {
+                do {
+                    let templateRows: [HabitTemplate] = try await client.database
+                        .from("habit_templates")
+                        .select()
+                        .eq("id", value: userHabit.habitTemplateId)
+                        .limit(1)
+                        .execute()
+                        .value
+                    
+                    guard let template = templateRows.first else {
+                        NSLog("[SupabaseManager] getHabitsForUserID: template not found for habit %@", userHabit.id.uuidString)
+                        continue
+                    }
+                    
+                    let habit = Habit(
+                        id: userHabit.id,
+                        name: template.name,
+                        icon: nil, // HabitTemplate doesn't have icon
+                        color: nil, // HabitTemplate doesn't have color
+                        category: template.category,
+                        target: template.targetCount ?? 1,
+                        targetFrequency: template.targetFrequency,
+                        targetCount: template.targetCount,
+                        currentStreak: userHabit.currentStreak,
+                        longestStreak: 0,
+                        isActive: userHabit.isActive,
+                        createdAt: userHabit.createdAt,
+                        updatedAt: userHabit.updatedAt,
+                        userId: userHabit.userId
+                    )
+                    habits.append(habit)
+                } catch {
+                    NSLog("[SupabaseManager] getHabitsForUserID: error fetching template for habit %@: %@", userHabit.id.uuidString, error.localizedDescription)
+                    continue
+                }
+            }
+            
+            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits", habits.count)
+            return habits
         } catch {
             NSLog("[SupabaseManager] getHabits: error %@", error.localizedDescription)
             if let decodingError = error as? DecodingError {
@@ -410,19 +546,53 @@ class SupabaseManager {
     
     // MARK: - Captures fetch
     func getCapturesSince(since: Date) async throws -> [HabitCapture] {
+        NSLog("[SupabaseManager] getCapturesSince: starting fetch for captures since %@", since.description)
+        
         let session = try await client.auth.session
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let sinceStr = iso.string(from: since)
-        let rows: [HabitCapture] = try await client.database
-            .from("captures")
-            .select()
-            .eq("user_id", value: session.user.id)
-            .gte("created_at", value: sinceStr)
-            .order("created_at", ascending: true)
-            .execute()
-            .value
-        return rows
+        
+        NSLog("[SupabaseManager] getCapturesSince: querying captures for user %@ since %@", session.user.id.uuidString, sinceStr)
+        
+        do {
+            let rows: [HabitCapture] = try await client.database
+                .from("captures")
+                .select()
+                .eq("user_id", value: session.user.id)
+                .gte("created_at", value: sinceStr)
+                .not("habit_id", operator: .is, value: "null")  // Filter out captures with null habit_id
+                .order("created_at", ascending: true)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getCapturesSince: successfully fetched %d captures", rows.count)
+            
+            // Filter out any captures with nil habitId (additional safety check)
+            let filteredRows = rows.filter { $0.habitId != nil }
+            NSLog("[SupabaseManager] getCapturesSince: filtered out %d captures with nil habitId", rows.count - filteredRows.count)
+            return filteredRows
+        } catch {
+            NSLog("[SupabaseManager] getCapturesSince: error %@", error.localizedDescription)
+            
+            // Add detailed error logging
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    NSLog("[SupabaseManager] getCapturesSince: missing key '%@' at path %@", key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .typeMismatch(let type, let context):
+                    NSLog("[SupabaseManager] getCapturesSince: type mismatch for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .valueNotFound(let type, let context):
+                    NSLog("[SupabaseManager] getCapturesSince: value not found for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .dataCorrupted(let context):
+                    NSLog("[SupabaseManager] getCapturesSince: data corrupted at path %@: %@", context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                @unknown default:
+                    NSLog("[SupabaseManager] getCapturesSince: unknown decoding error")
+                }
+            }
+            
+            throw error
+        }
     }
     
     // MARK: - Social Features
@@ -552,6 +722,235 @@ class SupabaseManager {
             .value
         return rows
     }
+    
+    // MARK: - Discovery Methods
+    func getTrendingHabits() async throws -> [TrendingHabit] {
+        NSLog("[SupabaseManager] getTrendingHabits: fetching trending habits from trending_habits_view")
+        
+        do {
+            let rows: [TrendingHabit] = try await client.database
+                .from("trending_habits_view")
+                .select()
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getTrendingHabits: successfully fetched %d trending habits", rows.count)
+            return rows
+        } catch {
+            NSLog("[SupabaseManager] getTrendingHabits: error %@, falling back to available habits", error.localizedDescription)
+            
+            // Fallback: Use available_habits as trending habits if view doesn't exist yet
+            let availableHabits: [AvailableHabit] = try await client.database
+                .from("available_habits")
+                .select()
+                .order("is_default", ascending: false)
+                .limit(10)
+                .execute()
+                .value
+            
+            // Convert AvailableHabit to TrendingHabit
+            let trendingHabits = availableHabits.map { habit in
+                TrendingHabit(
+                    id: habit.id,
+                    name: habit.name,
+                    category: habit.category,
+                    participants: Int.random(in: 50...500), // Mock data for now
+                    avgStreak: Double.random(in: 3.0...15.0), // Mock data for now
+                    description: habit.description ?? "A popular habit that many people are trying to build.",
+                    captures: [], // Will be populated by trending captures
+                    totalCaptures: Int.random(in: 100...1000) // Mock data for now
+                )
+            }
+            
+            NSLog("[SupabaseManager] getTrendingHabits: using fallback data with %d habits", trendingHabits.count)
+            return trendingHabits
+        }
+    }
+    
+    // MARK: - Trending Captures
+    func getTrendingCapturesForHabits() async throws -> [TrendingCapture] {
+        NSLog("[SupabaseManager] getTrendingCapturesForHabits: fetching trending captures from RPC function")
+        
+        do {
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: calling RPC function...")
+            
+            let captures: [TrendingCapture] = try await client.database
+                .rpc("get_trending_captures_for_habits")
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: successfully fetched %d trending captures", captures.count)
+            
+            // Log first capture details for debugging
+            if let firstCapture = captures.first {
+                NSLog("[SupabaseManager] getTrendingCapturesForHabits: first capture - id: %@, habitName: %@, likeCount: %d", 
+                      firstCapture.id.uuidString, firstCapture.habitName, firstCapture.likeCount)
+            }
+            
+            return captures
+        } catch {
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: error %@, falling back to recent captures", error.localizedDescription)
+            
+            // Add detailed error logging
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: missing key '%@' at path %@", 
+                          key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .typeMismatch(let type, let context):
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: type mismatch for %@ at path %@", 
+                          String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .valueNotFound(let type, let context):
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: value not found for %@ at path %@", 
+                          String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .dataCorrupted(let context):
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: data corrupted at path %@: %@", 
+                          context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                @unknown default:
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: unknown decoding error")
+                }
+            }
+            
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: trying fallback to recent captures...")
+            
+            // Fallback: Get recent public captures from the captures table
+            let captures: [HabitCapture] = try await client.database
+                .from("captures")
+                .select()
+                .eq("is_public", value: true)
+                .order("created_at", ascending: false)
+                .limit(20)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: fallback fetched %d captures", captures.count)
+            
+            // Convert HabitCapture to TrendingCapture
+            let trendingCaptures: [TrendingCapture] = captures.compactMap { capture in
+                // Skip captures without habitId
+                guard let habitId = capture.habitId else {
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: skipping capture %@ with nil habitId", capture.id.uuidString)
+                    return nil
+                }
+                
+                return TrendingCapture(
+                    id: capture.id,
+                    captureId: capture.id,
+                    habitId: habitId,
+                    userId: capture.userId,
+                    imageUrl: capture.imageUrl,
+                    caption: capture.caption,
+                    isPublic: capture.isPublic,
+                    captureCreatedAt: capture.createdAt,
+                    habitName: "Unknown Habit", // We'll need to join with habits table
+                    habitCategory: "General",
+                    userDisplayName: nil,
+                    userAvatarUrl: nil,
+                    likeCount: 0,
+                    totalCaptures: 1,
+                    trendScore: 1.0
+                )
+            }
+            
+            NSLog("[SupabaseManager] getTrendingCapturesForHabits: using fallback data with %d captures", trendingCaptures.count)
+            return trendingCaptures
+        }
+    }
+    
+    // MARK: - Capture Likes
+    func toggleCaptureLike(captureId: UUID) async throws -> Bool {
+        guard let currentUser = try await getCurrentUser() else {
+            throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        NSLog("[SupabaseManager] toggleCaptureLike: toggling like for capture %@", captureId.uuidString)
+        
+        do {
+            let result: [String: Bool] = try await client.database
+                .rpc("toggle_capture_like", params: [
+                    "capture_uuid": captureId.uuidString,
+                    "user_uuid": currentUser.id.uuidString
+                ])
+                .execute()
+                .value
+            
+            let wasLiked = result["toggle_capture_like"] ?? false
+            NSLog("[SupabaseManager] toggleCaptureLike: like %@", wasLiked ? "added" : "removed")
+            return wasLiked
+        } catch {
+            NSLog("[SupabaseManager] toggleCaptureLike: error %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    func isCaptureLikedByUser(captureId: UUID) async throws -> Bool {
+        guard let currentUser = try await getCurrentUser() else {
+            return false
+        }
+        
+        do {
+            let result: [String: Bool] = try await client.database
+                .rpc("is_capture_liked_by_user", params: [
+                    "capture_uuid": captureId.uuidString,
+                    "user_uuid": currentUser.id.uuidString
+                ])
+                .execute()
+                .value
+            
+            return result["is_capture_liked_by_user"] ?? false
+        } catch {
+            NSLog("[SupabaseManager] isCaptureLikedByUser: error %@", error.localizedDescription)
+            return false
+        }
+    }
+    
+    func getSocialFeedWithLikes() async throws -> [SocialFeedPost] {
+        guard let currentUser = try await getCurrentUser() else {
+            throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        NSLog("[SupabaseManager] getSocialFeedWithLikes: fetching social feed")
+        
+        do {
+            let posts: [SocialFeedPost] = try await client.database
+                .from("social_feed_with_likes")
+                .select()
+                .order("capture_created_at", ascending: false)
+                .limit(50)
+                .execute()
+                .value
+            
+            // Update isLikedByCurrentUser for each post
+            var updatedPosts: [SocialFeedPost] = []
+            for var post in posts {
+                let isLiked = try await isCaptureLikedByUser(captureId: post.captureId)
+                // Create a new post with updated like status
+                let updatedPost = SocialFeedPost(
+                    captureId: post.captureId,
+                    habitId: post.habitId,
+                    captureUserId: post.captureUserId,
+                    imageUrl: post.imageUrl,
+                    caption: post.caption,
+                    isPublic: post.isPublic,
+                    captureCreatedAt: post.captureCreatedAt,
+                    habitName: post.habitName,
+                    habitCategory: post.habitCategory,
+                    userDisplayName: post.userDisplayName,
+                    userAvatarUrl: post.userAvatarUrl,
+                    likeCount: post.likeCount,
+                    likedByUserIds: post.likedByUserIds,
+                    isLikedByCurrentUser: isLiked
+                )
+                updatedPosts.append(updatedPost)
+            }
+            
+            NSLog("[SupabaseManager] getSocialFeedWithLikes: successfully fetched %d posts", updatedPosts.count)
+            return updatedPosts
+        } catch {
+            NSLog("[SupabaseManager] getSocialFeedWithLikes: error %@", error.localizedDescription)
+            throw error
+        }
+    }
 
     func createAvailableHabit(name: String, category: String, icon: String?, color: String?) async throws -> AvailableHabit {
         struct InsertAvailable: Encodable {
@@ -584,72 +983,367 @@ class SupabaseManager {
         return row
     }
     
-    // MARK: - Direct Habit creation via PostgREST
+    // MARK: - Direct Habit creation via PostgREST (New Decoupled Schema with Uniqueness Check)
     func createHabitDirect(name: String, description: String?, category: String, targetFrequency: String, targetCount: Int? = nil) async throws -> Habit {
-        struct InsertHabit: Encodable {
-            let user_id: UUID
-            let name: String
-            let description: String?
-            let category: String
-            let target_frequency: String
-            let target_count: Int?
-        }
         let session = try await client.auth.session
-        let payload = InsertHabit(
+        
+        // First, try to find an existing habit template with the same name and category
+        let existingTemplates: [HabitTemplate] = try await client.database
+            .from("habit_templates")
+            .select()
+            .eq("name", value: name)
+            .eq("category", value: category)
+            .eq("is_active", value: true)
+            .limit(1)
+            .execute()
+            .value
+        
+        // If template exists, check if user already has this habit
+        if let existingTemplate = existingTemplates.first {
+            let existingUserHabits: [UserHabit] = try await client.database
+                .from("user_habits")
+                .select()
+                .eq("user_id", value: session.user.id)
+                .eq("habit_template_id", value: existingTemplate.id)
+                .eq("is_active", value: true)
+                .limit(1)
+                .execute()
+                .value
+            
+            if let existingUserHabit = existingUserHabits.first {
+                // User already has this habit, return the existing one
+                NSLog("[SupabaseManager] createHabitDirect: user already has habit %@ for template %@", existingUserHabit.id.uuidString, existingTemplate.id.uuidString)
+                
+                // Convert to legacy Habit format
+                return Habit(
+                    id: existingUserHabit.id,
+                    name: existingTemplate.name,
+                    icon: nil,
+                    color: nil,
+                    category: existingTemplate.category,
+                    target: existingTemplate.targetCount ?? 1,
+                    targetFrequency: existingTemplate.targetFrequency,
+                    targetCount: existingTemplate.targetCount,
+                    currentStreak: existingUserHabit.currentStreak,
+                    longestStreak: 0,
+                    isActive: existingUserHabit.isActive,
+                    createdAt: existingUserHabit.createdAt,
+                    updatedAt: existingUserHabit.updatedAt,
+                    userId: existingUserHabit.userId
+                )
+            }
+        }
+        
+
+        
+        // Find or create the habit template
+        let templateTemplates: [HabitTemplate] = try await client.database
+            .from("habit_templates")
+            .select()
+            .eq("name", value: name)
+            .eq("category", value: category)
+            .eq("is_active", value: true)
+            .limit(1)
+            .execute()
+            .value
+        
+        let template: HabitTemplate
+        
+        if let existingTemplate = templateTemplates.first {
+            // Reuse existing template
+            NSLog("[SupabaseManager] createHabitDirect: reusing existing template %@ for habit '%@'", existingTemplate.id.uuidString, name)
+            template = existingTemplate
+        } else {
+            // Create new habit template
+            struct CreateHabitTemplate: Encodable {
+                let name: String
+                let description: String?
+                let category: String
+                let target_frequency: String
+                let target_count: Int?
+                let is_active: Bool
+            }
+            
+            let templatePayload = CreateHabitTemplate(
+                name: name, 
+                description: description, 
+                category: category, 
+                target_frequency: targetFrequency, 
+                target_count: targetCount,
+                is_active: true
+            )
+            
+            let templateRows: [HabitTemplate] = try await client.database
+                .from("habit_templates")
+                .insert(templatePayload)
+                .select()
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let newTemplate = templateRows.first else {
+                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create habit template"])
+            }
+            
+            NSLog("[SupabaseManager] createHabitDirect: created new template %@ for habit '%@'", newTemplate.id.uuidString, name)
+            template = newTemplate
+        }
+        
+        // Create the user habit instance
+        struct CreateUserHabit: Encodable {
+            let habit_template_id: UUID
+            let user_id: UUID
+            let current_streak: Int
+            let is_active: Bool
+        }
+        
+        let userHabitPayload = CreateUserHabit(
+            habit_template_id: template.id,
             user_id: session.user.id,
-            name: name,
-            description: description,
-            category: category,
-            target_frequency: targetFrequency,
-            target_count: targetCount
+            current_streak: 0,
+            is_active: true
         )
-        let rows: [Habit] = try await client.database
-            .from("habits")
-            .insert(payload)
+        
+        let userHabitRows: [UserHabit] = try await client.database
+            .from("user_habits")
+            .insert(userHabitPayload)
             .select()
             .limit(1)
             .execute()
             .value
-        guard let habit = rows.first else {
-            throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create habit"])
+        
+        guard let userHabit = userHabitRows.first else {
+            throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create user habit"])
         }
-        return habit
+        
+        // Convert to legacy Habit format for backward compatibility
+        return Habit(
+            id: userHabit.id,
+            name: template.name,
+            icon: nil, // HabitTemplate doesn't have icon
+            color: nil, // HabitTemplate doesn't have color
+            category: template.category,
+            target: targetCount ?? 1,
+            targetFrequency: template.targetFrequency,
+            targetCount: template.targetCount,
+            currentStreak: userHabit.currentStreak,
+            longestStreak: 0,
+            isActive: userHabit.isActive,
+            createdAt: userHabit.createdAt,
+            updatedAt: userHabit.updatedAt,
+            userId: userHabit.userId
+        )
     }
     
     // MARK: - Storage Upload
     func uploadCaptureImage(imageData: Data, userId: UUID) async throws -> String {
         let userFolder = userId.uuidString.lowercased()
         let fileName = "\(userFolder)/\(UUID().uuidString).jpg"
-        NSLog("[Supabase] uploadCaptureImage: uploading to captures/%@ (bytes=%d)", fileName, imageData.count)
+        NSLog("[Supabase] uploadCaptureImage: uploading to captures_public/%@ (bytes=%d)", fileName, imageData.count)
+        
+        // Add timeout handling
+        let options = FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: true)
+        
+        do {
+            _ = try await withTimeout(seconds: 60) {
+                try await self.client.storage
+                    .from("captures_public")
+                    .upload(path: fileName, file: imageData, options: options)
+            }
+            NSLog("[Supabase] uploadCaptureImage: uploaded path %@", fileName)
+            return fileName
+        } catch {
+            NSLog("[Supabase] uploadCaptureImage: upload failed - %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    // Helper function for timeout handling
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "TimeoutError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation timed out after \(seconds) seconds"])
+            }
+            
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+    
+    // Get a signed URL for a capture image (respects RLS policies)
+    func getSignedURLForCapture(path: String, expiresIn: Int = 3600) async throws -> String {
+        print("🔐 Creating signed URL for path: \(path)")
+        let signedURL = try await client.storage
+            .from("captures")
+            .createSignedURL(path: path, expiresIn: expiresIn)
+        print("🔐 Created signed URL: \(signedURL.absoluteString)")
+        return signedURL.absoluteString
+    }
+    
+    // Upload image to trending-images bucket (public access)
+    func uploadTrendingImage(imageData: Data, userId: UUID) async throws -> String {
+        let userFolder = userId.uuidString.lowercased()
+        let fileName = "\(userFolder)/\(UUID().uuidString).jpg"
+        NSLog("[Supabase] uploadTrendingImage: uploading to trending-images/%@ (bytes=%d)", fileName, imageData.count)
         let options = FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: true)
         _ = try await client.storage
-            .from("captures")
+            .from("trending-images")
             .upload(path: fileName, file: imageData, options: options)
-        NSLog("[Supabase] uploadCaptureImage: uploaded path %@", fileName)
+        NSLog("[Supabase] uploadTrendingImage: uploaded path %@", fileName)
         return fileName
     }
     
-    // MARK: - Captures insert
+    // Add a capture to trending images
+    func addCaptureToTrending(captureId: UUID, userId: UUID) async throws -> String {
+        let result: [String] = try await client.rpc("add_capture_to_trending", params: [
+            "capture_uuid": captureId.uuidString,
+            "user_uuid": userId.uuidString
+        ]).execute().value
+        return result.first ?? ""
+    }
+    
+    // Remove a capture from trending images
+    func removeCaptureFromTrending(captureId: UUID) async throws -> Bool {
+        let result: [Bool] = try await client.rpc("remove_capture_from_trending", params: [
+            "capture_uuid": captureId.uuidString
+        ]).execute().value
+        return result.first ?? false
+    }
+    
+    // Copy image from captures bucket to trending-images bucket
+    func copyImageToTrending(originalPath: String, trendingPath: String) async throws {
+        // Download the image from captures bucket
+        let imageData = try await client.storage
+            .from("captures")
+            .download(path: originalPath)
+        
+        // Upload to trending-images bucket
+        let options = FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: true)
+        _ = try await client.storage
+            .from("trending-images")
+            .upload(path: trendingPath, file: imageData, options: options)
+        
+        NSLog("[Supabase] Copied image from captures/%@ to trending-images/%@", originalPath, trendingPath)
+    }
+    
+    // Populate trending images by copying files
+    func populateTrendingImages() async throws {
+        // Get all trending image entries that need files copied
+        let result: [TrendingImageEntry] = try await client.database
+            .from("trending_images")
+            .select("habit_id, capture_id, user_id, image_path")
+            .eq("is_active", value: true)
+            .execute()
+            .value
+        
+        for entry in result {
+            // Get the original capture path
+            let capture: [Capture] = try await client.database
+                .from("captures")
+                .select("image_url")
+                .eq("id", value: entry.captureId.uuidString)
+                .execute()
+                .value
+            
+            if let capture = capture.first, let originalPath = extractPathFromURL(capture.imageUrl) {
+                // Copy the image file
+                try await copyImageToTrending(originalPath: originalPath, trendingPath: entry.imagePath)
+            }
+        }
+    }
+    
+    // Helper function to extract path from full URL
+    private func extractPathFromURL(_ url: String?) -> String? {
+        guard let url = url else { return nil }
+        // Extract path from URL like: https://.../storage/v1/object/public/captures/user-id/uuid.jpg
+        if let range = url.range(of: "/captures/") {
+            let pathStart = url.index(range.upperBound, offsetBy: 0)
+            return String(url[pathStart...])
+        }
+        return url
+    }
+    
+    // Struct for trending image entries
+    private struct TrendingImageEntry: Codable {
+        let habitId: UUID
+        let captureId: UUID
+        let userId: UUID
+        let imagePath: String
+        
+        enum CodingKeys: String, CodingKey {
+            case habitId = "habit_id"
+            case captureId = "capture_id"
+            case userId = "user_id"
+            case imagePath = "image_path"
+        }
+    }
+    
+    // MARK: - Captures insert (New Decoupled Schema)
     func insertCapture(habitId: String, userId: UUID, imageUrl: String, caption: String?, isPublic: Bool) async throws -> HabitCapture {
+        NSLog("[SupabaseManager] insertCapture: starting with habitId=%@, userId=%@", habitId, userId.uuidString)
+        
+        // Validate habitId format
+        guard let habitUUID = UUID(uuidString: habitId) else {
+            NSLog("[SupabaseManager] insertCapture: ERROR - Invalid habitId format: %@", habitId)
+            throw NSError(domain: "ValidationError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid habit ID format"])
+        }
+        
+        NSLog("[SupabaseManager] insertCapture: validated habitId=%@", habitUUID.uuidString)
+        
         struct InsertCapture: Encodable {
-            let habit_id: UUID
+            let habit_id: UUID  // Changed from user_habit_id to habit_id
             let user_id: UUID
             let image_url: String
             let caption: String?
             let is_public: Bool
         }
-        let payload = InsertCapture(habit_id: UUID(uuidString: habitId)!, user_id: userId, image_url: imageUrl, caption: caption, is_public: isPublic)
-        let rows: [HabitCapture] = try await client.database
-            .from("captures")
-            .insert(payload)
-            .select()
-            .limit(1)
-            .execute()
-            .value
-        guard let row = rows.first else {
-            throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create capture"])
+        
+        let payload = InsertCapture(
+            habit_id: habitUUID,  // Using habit_id instead of user_habit_id
+            user_id: userId, 
+            image_url: imageUrl, 
+            caption: caption, 
+            is_public: isPublic
+        )
+        
+        NSLog("[SupabaseManager] insertCapture: created payload with habit_id=%@", payload.habit_id.uuidString)
+        
+        do {
+            let rows: [HabitCapture] = try await client.database
+                .from("captures")
+                .insert(payload)
+                .select()
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let row = rows.first else {
+                NSLog("[SupabaseManager] insertCapture: ERROR - No rows returned from insert")
+                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create capture"])
+            }
+            
+            NSLog("[SupabaseManager] insertCapture: successfully inserted capture %@ with habitId=%@", row.id.uuidString, row.habitId?.uuidString ?? "nil")
+            
+            // Verify the returned capture has the correct habit_id
+            if row.habitId == nil {
+                NSLog("[SupabaseManager] insertCapture: WARNING - Inserted capture has nil habitId!")
+            } else if row.habitId != habitUUID {
+                NSLog("[SupabaseManager] insertCapture: WARNING - habitId mismatch! Expected=%@, Got=%@", habitUUID.uuidString, row.habitId!.uuidString)
+            } else {
+                NSLog("[SupabaseManager] insertCapture: SUCCESS - habitId matches expected value")
+            }
+            
+            return row
+        } catch {
+            NSLog("[SupabaseManager] insertCapture: ERROR during database operation: %@", error.localizedDescription)
+            throw error
         }
-        return row
     }
     
 private func makeAPICall(

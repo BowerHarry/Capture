@@ -127,6 +127,11 @@ struct Capture: Identifiable, Codable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+    
+    // Computed property for backward compatibility with decoupled schema
+    var userHabitId: UUID {
+        return habitId
+    }
 }
 
 // MARK: - User Models
@@ -378,7 +383,7 @@ struct CreateCaptureRequest: Codable {
 
 struct HabitCapture: Identifiable, Codable {
     let id: UUID
-    let habitId: UUID
+    let habitId: UUID?
     let userId: UUID
     let imageUrl: String?
     let caption: String?
@@ -397,7 +402,7 @@ struct HabitCapture: Identifiable, Codable {
         case updatedAt = "updated_at"
     }
     
-    init(id: UUID = UUID(), habitId: UUID, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    init(id: UUID = UUID(), habitId: UUID?, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.habitId = habitId
         self.userId = userId
@@ -406,6 +411,11 @@ struct HabitCapture: Identifiable, Codable {
         self.isPublic = isPublic
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+    
+    // Computed property for backward compatibility with decoupled schema
+    var userHabitId: UUID {
+        return habitId ?? UUID() // Return a default UUID if habitId is nil
     }
 }
 
@@ -473,6 +483,39 @@ struct PopularHabit: Identifiable, Codable {
     }
 }
 
+struct TrendingHabit: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let category: String
+    let participants: Int // Unique users who captured this habit in the past week
+    let avgStreak: Double // Average current streak for participants
+    let description: String // AI-generated description
+    let captures: [String]? // Array of photo URLs from the past week
+    let totalCaptures: Int // Total captures in the past week
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case category
+        case participants
+        case avgStreak = "avg_streak"
+        case description
+        case captures
+        case totalCaptures = "total_captures"
+    }
+    
+    init(id: UUID = UUID(), name: String, category: String, participants: Int, avgStreak: Double, description: String, captures: [String]? = nil, totalCaptures: Int = 0) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.participants = participants
+        self.avgStreak = avgStreak
+        self.description = description
+        self.captures = captures
+        self.totalCaptures = totalCaptures
+    }
+}
+
 struct CommunityStats: Codable {
     let activeUsers: Int
     let totalHabits: Int
@@ -495,5 +538,206 @@ struct DiscoveryHabitCategory: Identifiable {
         self.name = name
         self.count = count
         self.color = color
+    }
+}
+
+struct CaptureLike: Identifiable, Codable {
+    let id: UUID
+    let captureId: UUID
+    let userId: UUID
+    let createdAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case captureId = "capture_id"
+        case userId = "user_id"
+        case createdAt = "created_at"
+    }
+}
+
+struct CaptureLikeCount: Identifiable, Codable {
+    let captureId: UUID
+    let habitId: UUID
+    let captureUserId: UUID
+    let imageUrl: String?
+    let caption: String?
+    let captureCreatedAt: Date
+    let likeCount: Int
+    let likedByUserIds: [UUID]
+    
+    var id: UUID { captureId }
+    
+    enum CodingKeys: String, CodingKey {
+        case captureId = "capture_id"
+        case habitId = "habit_id"
+        case captureUserId = "capture_user_id"
+        case imageUrl = "image_url"
+        case caption
+        case captureCreatedAt = "capture_created_at"
+        case likeCount
+        case likedByUserIds
+    }
+}
+
+struct SocialFeedPost: Identifiable, Codable {
+    let captureId: UUID
+    let habitId: UUID
+    let captureUserId: UUID
+    let imageUrl: String?
+    let caption: String?
+    let isPublic: Bool
+    let captureCreatedAt: Date
+    let habitName: String
+    let habitCategory: String
+    let userDisplayName: String?
+    let userAvatarUrl: String?
+    let likeCount: Int
+    let likedByUserIds: [UUID]
+    let isLikedByCurrentUser: Bool
+    
+    var id: UUID { captureId }
+    
+    enum CodingKeys: String, CodingKey {
+        case captureId = "capture_id"
+        case habitId = "habit_id"
+        case captureUserId = "capture_user_id"
+        case imageUrl = "image_url"
+        case caption
+        case isPublic = "is_public"
+        case captureCreatedAt = "capture_created_at"
+        case habitName = "habit_name"
+        case habitCategory = "habit_category"
+        case userDisplayName = "user_display_name"
+        case userAvatarUrl = "user_avatar_url"
+        case likeCount
+        case likedByUserIds
+        case isLikedByCurrentUser
+    }
+}
+
+// MARK: - New Decoupled Schema Models
+
+struct UserHabit: Identifiable, Codable {
+    let id: UUID
+    let userId: UUID
+    let habitTemplateId: UUID
+    let currentStreak: Int
+    let isActive: Bool
+    let createdAt: Date
+    let updatedAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case habitTemplateId = "habit_template_id"
+        case currentStreak = "current_streak"
+        case isActive = "is_active"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
+    init(id: UUID = UUID(), userId: UUID, habitTemplateId: UUID, currentStreak: Int = 0, isActive: Bool = true, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.userId = userId
+        self.habitTemplateId = habitTemplateId
+        self.currentStreak = currentStreak
+        self.isActive = isActive
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+struct HabitTemplate: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let description: String?
+    let category: String
+    let targetFrequency: String
+    let targetCount: Int?
+    let isActive: Bool
+    let createdAt: Date
+    let updatedAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case category
+        case targetFrequency = "target_frequency"
+        case targetCount = "target_count"
+        case isActive = "is_active"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
+    init(id: UUID = UUID(), name: String, description: String? = nil, category: String, targetFrequency: String, targetCount: Int? = nil, isActive: Bool = true, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.category = category
+        self.targetFrequency = targetFrequency
+        self.targetCount = targetCount
+        self.isActive = isActive
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+struct TrendingCapture: Identifiable, Codable {
+    let id: UUID
+    let captureId: UUID
+    let habitId: UUID
+    let userId: UUID
+    let imageUrl: String?
+    let caption: String?
+    let isPublic: Bool
+    let captureCreatedAt: Date
+    let habitName: String
+    let habitCategory: String
+    let userDisplayName: String?
+    let userAvatarUrl: String?
+    let likeCount: Int
+    let totalCaptures: Int
+    let trendScore: Double
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case captureId = "capture_id"
+        case habitId = "habit_id"
+        case userId = "user_id"
+        case imageUrl = "image_url"
+        case caption
+        case isPublic = "is_public"
+        case captureCreatedAt = "capture_created_at"
+        case habitName = "habit_name"
+        case habitCategory = "habit_category"
+        case userDisplayName = "user_display_name"
+        case userAvatarUrl = "user_avatar_url"
+        case likeCount = "like_count"
+        case totalCaptures = "total_captures"
+        case trendScore = "trend_score"
+    }
+    
+    init(id: UUID = UUID(), captureId: UUID, habitId: UUID, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, captureCreatedAt: Date = Date(), habitName: String, habitCategory: String, userDisplayName: String? = nil, userAvatarUrl: String? = nil, likeCount: Int = 0, totalCaptures: Int = 0, trendScore: Double = 0.0) {
+        self.id = id
+        self.captureId = captureId
+        self.habitId = habitId
+        self.userId = userId
+        self.imageUrl = imageUrl
+        self.caption = caption
+        self.isPublic = isPublic
+        self.captureCreatedAt = captureCreatedAt
+        self.habitName = habitName
+        self.habitCategory = habitCategory
+        self.userDisplayName = userDisplayName
+        self.userAvatarUrl = userAvatarUrl
+        self.likeCount = likeCount
+        self.totalCaptures = totalCaptures
+        self.trendScore = trendScore
+    }
+    
+    // Computed property for backward compatibility with decoupled schema
+    var userHabitId: UUID {
+        return habitId
     }
 }

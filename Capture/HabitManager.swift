@@ -10,9 +10,14 @@ class HabitManager: ObservableObject {
     @Published var availableHabits: [AvailableHabit] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    private var isUpdatingBestStreak = false
+    private var hasComputedProgress = false
+    private var lastComputedDataHash = ""
     
     // Discovery properties
     @Published var popularHabits: [PopularHabit] = []
+    @Published var trendingHabits: [TrendingHabit] = []
+    @Published var trendingCaptures: [TrendingCapture] = []
     @Published var communityStats = CommunityStats()
     @Published var categories: [DiscoveryHabitCategory] = []
 
@@ -32,6 +37,9 @@ class HabitManager: ObservableObject {
     @Published var todayPercentValue: Int = 0
     @Published var weeklyPercentageValue: Int = 0
     @Published var weeklyCompletionsValue: Int = 0
+    
+    // Private properties for preventing duplicate calls
+    private var isLoadingTrending = false
     
     private let supabaseClient = SupabaseManager.shared
     
@@ -77,6 +85,15 @@ class HabitManager: ObservableObject {
     // MARK: - Best Streak Management
     
     func updateUserBestStreak() async {
+        // Prevent duplicate calls
+        if isUpdatingBestStreak {
+            NSLog("[HabitManager] updateUserBestStreak: already updating, skipping")
+            return
+        }
+        
+        isUpdatingBestStreak = true
+        defer { isUpdatingBestStreak = false }
+        
         guard let currentUser = AuthManager.shared.currentUser else { return }
         
         // Calculate the current best streak from all habits
@@ -154,8 +171,28 @@ class HabitManager: ObservableObject {
         await updateUserBestStreak()
     }
     
+    // Reset progress computation when data changes
+    private func resetProgressComputation() {
+        hasComputedProgress = false
+        lastComputedDataHash = ""
+        NSLog("[HabitManager] resetProgressComputation: progress computation reset")
+    }
+    
     // MARK: - Progress computation
     private func computeStreaksAndCompletion(habits: [Habit], captures: [HabitCapture]) {
+        // Create a hash of the current data to detect changes
+        let habitsHash = habits.map { "\($0.id)-\($0.longestStreak)" }.joined(separator: "|")
+        let capturesHash = captures.map { "\($0.id)-\($0.createdAt)" }.joined(separator: "|")
+        let currentDataHash = "\(habitsHash)|\(capturesHash)"
+        
+        // Prevent duplicate calculations if data hasn't changed
+        if hasComputedProgress && lastComputedDataHash == currentDataHash {
+            NSLog("[HabitManager] computeStreaksAndCompletion: data unchanged, skipping")
+            return
+        }
+        
+        hasComputedProgress = true
+        lastComputedDataHash = currentDataHash
         NSLog("[HabitManager] computeStreaksAndCompletion: starting with \(habits.count) habits and \(captures.count) captures")
         
         // Build per-habit buckets
@@ -165,7 +202,7 @@ class HabitManager: ObservableObject {
         let todayStart = startOfDay(Date())
 
         for cap in captures {
-            let hId = cap.habitId
+            let hId = cap.userHabitId
             let dKey = startOfDay(cap.createdAt)
             let wKey = weekKey(for: cap.createdAt)
             let mKey = monthKey(for: cap.createdAt)
@@ -253,9 +290,11 @@ class HabitManager: ObservableObject {
         self.totalStreakSum = totalStreak
         self.longestStreakValue = longestStreak
         
-        // Update user's best streak if needed
-        Task {
-            await updateUserBestStreak()
+        // Update user's best streak if needed (only once)
+        if !isUpdatingBestStreak {
+            Task {
+                await updateUserBestStreak()
+            }
         }
         
         NSLog("[HabitManager] computeStreaksAndCompletion: completed - totalStreak: \(totalStreak), longestStreak: \(longestStreak), progress entries: \(progress.count)")
@@ -367,23 +406,66 @@ class HabitManager: ObservableObject {
     }
 
     func loadHabits() async {
+        NSLog("[HabitManager] loadHabits: starting fetch")
         isLoading = true
         errorMessage = nil
-        NSLog("[HabitManager] loadHabits: starting fetch")
         defer { isLoading = false }
+        
         do {
-            let result = try await supabaseClient.getHabits()
-            NSLog("[HabitManager] loadHabits: fetched %d habits", result.count)
-            self.habits = result
-            // Fetch enough captures for streaks (last 6 months)
-            let recentCaptures = try await supabaseClient.getCapturesSince(since: sixMonthsAgo)
-            self.captures = recentCaptures
-            computeStreaksAndCompletion(habits: result, captures: recentCaptures)
+            let fetchedHabits = try await supabaseClient.getHabits()
+            NSLog("[HabitManager] loadHabits: successfully fetched %d habits", fetchedHabits.count)
+            
+            // Log each habit's details
+            for (index, habit) in fetchedHabits.enumerated() {
+                NSLog("[HabitManager] loadHabits: habit[%d] id=%@, name=%@, userId=%@", index, habit.id.uuidString, habit.name, habit.userId.uuidString)
+            }
+            
+            self.habits = fetchedHabits
+            
+            // Load captures for these habits
+            NSLog("[HabitManager] loadHabits: loading captures for habits")
+            let captures = try await supabaseClient.getCapturesSince(since: sixMonthsAgo)
+            NSLog("[HabitManager] loadHabits: successfully fetched %d captures", captures.count)
+            
+            // Log capture details
+            for (index, capture) in captures.enumerated() {
+                NSLog("[HabitManager] loadHabits: capture[%d] id=%@, habitId=%@, userHabitId=%@", index, capture.id.uuidString, capture.habitId?.uuidString ?? "nil", capture.userHabitId.uuidString)
+            }
+            
+            self.captures = captures
+            
+            // Compute streaks and completion
+            NSLog("[HabitManager] loadHabits: computing streaks and completion")
+            computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            
+            NSLog("[HabitManager] loadHabits: completed successfully")
         } catch {
-            self.errorMessage = error.localizedDescription
             NSLog("[HabitManager] loadHabits: error %@", error.localizedDescription)
-            self.habits = []
+            self.errorMessage = error.localizedDescription
         }
+    }
+    
+    // Load all app data at startup
+    func loadAppData() async {
+        // Prevent duplicate calls
+        if isLoading {
+            NSLog("[HabitManager] loadAppData: already loading, skipping")
+            return
+        }
+        
+        NSLog("[HabitManager] loadAppData: starting app data load")
+        
+        // Load user habits and captures
+        await loadHabits()
+        
+        // Load trending and popular data in parallel (without loading state checks)
+        async let trendingTask = loadTrendingHabitsInternal()
+        async let popularTask = loadPopularHabitsInternal()
+        
+        // Wait for both to complete
+        await (trendingTask, popularTask)
+        
+        NSLog("[HabitManager] loadAppData: completed app data load")
     }
 
     func createHabit(name: String, description: String?, category: String, targetFrequency: String) async {
@@ -433,22 +515,58 @@ class HabitManager: ObservableObject {
     }
     
     func createCapture(habitId: UUID, caption: String?, isPublic: Bool, imageData: Data?) async {
-        guard let imageData = imageData else { return }
+        guard let imageData = imageData else { 
+            NSLog("[HabitManager] createCapture: ERROR - No image data provided")
+            return 
+        }
+        
+        NSLog("[HabitManager] createCapture: starting capture creation for habit %@", habitId.uuidString)
+        NSLog("[HabitManager] createCapture: parameters - caption=%@, isPublic=%@, imageDataSize=%d", caption ?? "nil", String(isPublic), imageData.count)
+        
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
+        
         do {
             guard let user = try await SupabaseManager.shared.getCurrentUser() else {
+                NSLog("[HabitManager] createCapture: ERROR - No authenticated user")
                 throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
             }
+            
+            NSLog("[HabitManager] createCapture: authenticated user %@", user.id.uuidString)
+            
+            NSLog("[HabitManager] createCapture: uploading image to storage (bytes=%d)", imageData.count)
             let storagePath = try await SupabaseManager.shared.uploadCaptureImage(imageData: imageData, userId: user.id)
-            let created = try await SupabaseManager.shared.insertCapture(habitId: habitId.uuidString, userId: user.id, imageUrl: storagePath, caption: caption, isPublic: isPublic)
+            NSLog("[HabitManager] createCapture: successfully uploaded to %@", storagePath)
+            
+            // Manually construct the public URL since we're uploading to captures_public bucket
+            let publicURL = "https://your-project-ref.supabase.co/storage/v1/object/public/captures_public/\(storagePath)"
+            NSLog("[HabitManager] createCapture: created public URL %@", publicURL)
+            
+            NSLog("[HabitManager] createCapture: calling insertCapture with habitId=%@", habitId.uuidString)
+            let created = try await SupabaseManager.shared.insertCapture(habitId: habitId.uuidString, userId: user.id, imageUrl: publicURL, caption: caption, isPublic: isPublic)
+            NSLog("[HabitManager] createCapture: successfully inserted capture %@ with habitId=%@", created.id.uuidString, created.habitId?.uuidString ?? "nil")
+            
+            // Verify the returned capture has the expected habitId
+            if created.habitId != habitId {
+                NSLog("[HabitManager] createCapture: WARNING - habitId mismatch! Expected=%@, Got=%@", habitId.uuidString, created.habitId?.uuidString ?? "nil")
+            } else {
+                NSLog("[HabitManager] createCapture: SUCCESS - habitId matches expected value")
+            }
+            
             self.captures.append(created)
-            // Recompute progress after new capture
+            NSLog("[HabitManager] createCapture: added capture to local array, total captures=%d", self.captures.count)
+            
+            // Reset progress computation and recompute after new capture
+            resetProgressComputation()
             computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            
             // Immediately update best streak after capture
             await updateUserBestStreak()
+            
+            NSLog("[HabitManager] createCapture: completed successfully")
         } catch {
+            NSLog("[HabitManager] createCapture: ERROR %@", error.localizedDescription)
             self.errorMessage = error.localizedDescription
         }
     }
@@ -481,14 +599,12 @@ class HabitManager: ObservableObject {
     
     func isHabitCompleteToday(habitId: UUID, targetCount: Int) -> Bool {
         let today = calendar.startOfDay(for: Date())
-        let todays = captures.filter { $0.habitId == habitId && calendar.startOfDay(for: $0.createdAt) == today }
+                    let todays = captures.filter { $0.userHabitId == habitId && calendar.startOfDay(for: $0.createdAt) == today }
         return todays.count >= max(1, targetCount)
     }
     
     func progress(for habitId: UUID) -> HabitProgressState? {
-        let progress = habitProgress[habitId]
-        NSLog("[HabitManager] progress(for: \(habitId)): \(progress?.currentStreak ?? -1)")
-        return progress
+        return habitProgress[habitId]
     }
 
     func createTrackedHabit(name: String, category: String, targetNumber: Int, period: TargetFrequency) async -> Habit? {
@@ -514,11 +630,80 @@ class HabitManager: ObservableObject {
     
     // MARK: - Discovery Methods
     
-    func loadPopularHabits() async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+    func loadTrendingHabits() async {
+        // Prevent duplicate calls
+        if isLoading {
+            NSLog("[HabitManager] loadTrendingHabits: already loading, skipping")
+            return
+        }
         
+        await loadTrendingHabitsInternal()
+    }
+    
+    private func loadTrendingHabitsInternal() async {
+        NSLog("[HabitManager] loadTrendingHabitsInternal: starting")
+        isLoadingTrending = true
+        defer { isLoadingTrending = false }
+        
+        do {
+            let trendingHabits = try await supabaseClient.getTrendingHabits()
+            NSLog("[HabitManager] loadTrendingHabitsInternal: successfully fetched %d trending habits", trendingHabits.count)
+            
+            // Log each trending habit's details
+            for (index, habit) in trendingHabits.enumerated() {
+                NSLog("[HabitManager] loadTrendingHabitsInternal: trending[%d] id=%@, name=%@, totalCaptures=%d, participants=%d", index, habit.id.uuidString, habit.name, habit.totalCaptures, habit.participants)
+            }
+            
+            self.trendingHabits = trendingHabits
+            
+            // Load trending captures for these habits
+            NSLog("[HabitManager] loadTrendingHabitsInternal: loading trending captures")
+            let trendingCaptures = try await supabaseClient.getTrendingCapturesForHabits()
+            NSLog("[HabitManager] loadTrendingHabitsInternal: successfully fetched %d trending captures", trendingCaptures.count)
+            
+            // Log trending capture details
+            for (index, capture) in trendingCaptures.enumerated() {
+                NSLog("[HabitManager] loadTrendingHabitsInternal: trendingCapture[%d] id=%@, habitId=%@, likeCount=%d", index, capture.id.uuidString, capture.habitId.uuidString, capture.likeCount)
+            }
+            
+            self.trendingCaptures = trendingCaptures
+            
+            NSLog("[HabitManager] loadTrendingHabitsInternal: completed successfully")
+        } catch {
+            NSLog("[HabitManager] loadTrendingHabitsInternal: error %@", error.localizedDescription)
+        }
+    }
+    
+    // Helper function to get trending captures for a specific habit
+    func getTrendingCaptures(for habitId: UUID) -> [TrendingCapture] {
+        NSLog("[HabitManager] getTrendingCaptures: filtering for habitId %@", habitId.uuidString)
+        NSLog("[HabitManager] getTrendingCaptures: total trendingCaptures count: %d", trendingCaptures.count)
+        
+        // Debug: log the types of objects in trendingCaptures and check for nil habitId
+        for (index, item) in trendingCaptures.enumerated() {
+            NSLog("[HabitManager] getTrendingCaptures: item %d type: %@", index, String(describing: type(of: item)))
+            if let capture = item as? TrendingCapture {
+                NSLog("[HabitManager] getTrendingCaptures: item %d is TrendingCapture with habitId: %@", index, capture.habitId.uuidString)
+            } else {
+                NSLog("[HabitManager] getTrendingCaptures: item %d is NOT TrendingCapture, value: %@", index, String(describing: item))
+            }
+        }
+        
+        let filtered = trendingCaptures.filter { $0.habitId == habitId }
+        NSLog("[HabitManager] getTrendingCaptures: filtered count: %d", filtered.count)
+        return filtered
+    }
+    
+    // Helper function to get trending capture image URLs for a specific habit
+    func getTrendingCaptureUrls(for habitId: UUID) -> [String] {
+        return getTrendingCaptures(for: habitId).compactMap { $0.imageUrl }
+    }
+    
+    func loadPopularHabits() async {
+        await loadPopularHabitsInternal()
+    }
+    
+    private func loadPopularHabitsInternal() async {
         do {
             // Initialize categories
             let initialCategories = [
@@ -541,7 +726,7 @@ class HabitManager: ObservableObject {
                     totalStreak: 8750,
                     description: "Start your day with energy and build strength",
                     image: nil,
-                    captures: ["https://picsum.photos/200/200?random=1", "https://picsum.photos/200/200?random=2"]
+                    captures: []
                 ),
                 PopularHabit(
                     name: "Daily Meditation",
@@ -550,7 +735,7 @@ class HabitManager: ObservableObject {
                     totalStreak: 6230,
                     description: "Find inner peace and reduce stress",
                     image: nil,
-                    captures: ["https://picsum.photos/200/200?random=3"]
+                    captures: []
                 ),
                 PopularHabit(
                     name: "Read 30 Minutes",
@@ -559,7 +744,7 @@ class HabitManager: ObservableObject {
                     totalStreak: 14700,
                     description: "Expand your knowledge and vocabulary",
                     image: nil,
-                    captures: ["https://picsum.photos/200/200?random=4", "https://picsum.photos/200/200?random=5", "https://picsum.photos/200/200?random=6"]
+                    captures: []
                 ),
                 PopularHabit(
                     name: "Drink 8 Glasses of Water",
@@ -568,7 +753,7 @@ class HabitManager: ObservableObject {
                     totalStreak: 23800,
                     description: "Stay hydrated and maintain good health",
                     image: nil,
-                    captures: ["https://picsum.photos/200/200?random=7", "https://picsum.photos/200/200?random=8"]
+                    captures: []
                 ),
                 PopularHabit(
                     name: "No Phone Before Bed",
@@ -577,7 +762,7 @@ class HabitManager: ObservableObject {
                     totalStreak: 10920,
                     description: "Improve sleep quality and reduce blue light exposure",
                     image: nil,
-                    captures: ["https://picsum.photos/200/200?random=9"]
+                    captures: []
                 )
             ]
             
@@ -665,6 +850,26 @@ class HabitManager: ObservableObject {
         } catch {
             self.errorMessage = error.localizedDescription
             return []
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    /// Helper function to add timeout to async operations
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "TimeoutError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Operation timed out after \(seconds) seconds"])
+            }
+            
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 }
