@@ -561,16 +561,16 @@ class SupabaseManager {
                 .select()
                 .eq("user_id", value: session.user.id)
                 .gte("created_at", value: sinceStr)
-                .not("habit_id", operator: .is, value: "null")  // Filter out captures with null habit_id
+                .not("user_habit_id", operator: .is, value: "null")  // Filter out captures with null user_habit_id
                 .order("created_at", ascending: true)
                 .execute()
                 .value
             
             NSLog("[SupabaseManager] getCapturesSince: successfully fetched %d captures", rows.count)
             
-            // Filter out any captures with nil habitId (additional safety check)
-            let filteredRows = rows.filter { $0.habitId != nil }
-            NSLog("[SupabaseManager] getCapturesSince: filtered out %d captures with nil habitId", rows.count - filteredRows.count)
+            // Filter out any captures with nil userHabitId (additional safety check)
+            let filteredRows = rows.filter { $0.userHabitId != nil }
+            NSLog("[SupabaseManager] getCapturesSince: filtered out %d captures with nil userHabitId", rows.count - filteredRows.count)
             return filteredRows
         } catch {
             NSLog("[SupabaseManager] getCapturesSince: error %@", error.localizedDescription)
@@ -827,16 +827,16 @@ class SupabaseManager {
             
             // Convert HabitCapture to TrendingCapture
             let trendingCaptures: [TrendingCapture] = captures.compactMap { capture in
-                // Skip captures without habitId
-                guard let habitId = capture.habitId else {
-                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: skipping capture %@ with nil habitId", capture.id.uuidString)
+                // Skip captures without habitTemplateId
+                guard let habitTemplateId = capture.habitTemplateId else {
+                    NSLog("[SupabaseManager] getTrendingCapturesForHabits: skipping capture %@ with nil habitTemplateId", capture.id.uuidString)
                     return nil
                 }
                 
                 return TrendingCapture(
                     id: capture.id,
                     captureId: capture.id,
-                    habitId: habitId,
+                    habitTemplateId: habitTemplateId,
                     userId: capture.userId,
                     imageUrl: capture.imageUrl,
                     caption: capture.caption,
@@ -928,6 +928,7 @@ class SupabaseManager {
                 let updatedPost = SocialFeedPost(
                     captureId: post.captureId,
                     habitId: post.habitId,
+                    habitTemplateId: post.habitTemplateId,
                     captureUserId: post.captureUserId,
                     imageUrl: post.imageUrl,
                     caption: post.caption,
@@ -1284,7 +1285,7 @@ class SupabaseManager {
         }
     }
     
-    // MARK: - Captures insert (New Decoupled Schema)
+    // MARK: - Captures insert (New Decoupled Schema with Habit Templates)
     func insertCapture(habitId: String, userId: UUID, imageUrl: String, caption: String?, isPublic: Bool) async throws -> HabitCapture {
         NSLog("[SupabaseManager] insertCapture: starting with habitId=%@, userId=%@", habitId, userId.uuidString)
         
@@ -1294,10 +1295,37 @@ class SupabaseManager {
             throw NSError(domain: "ValidationError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid habit ID format"])
         }
         
-        NSLog("[SupabaseManager] insertCapture: validated habitId=%@", habitUUID.uuidString)
+        // Get habit template ID from user_habits
+        NSLog("[SupabaseManager] insertCapture: querying user_habits for habitId=%@", habitUUID.uuidString)
+        
+        struct UserHabitTemplate: Codable {
+            let habitTemplateId: UUID
+            
+            enum CodingKeys: String, CodingKey {
+                case habitTemplateId = "habit_template_id"
+            }
+        }
+        
+        let userHabits: [UserHabitTemplate] = try await client.database
+            .from("user_habits")
+            .select("habit_template_id")
+            .eq("id", value: habitUUID)
+            .limit(1)
+            .execute()
+            .value
+        
+        NSLog("[SupabaseManager] insertCapture: user_habits query returned %d results", userHabits.count)
+        
+        guard let userHabit = userHabits.first else {
+            NSLog("[SupabaseManager] insertCapture: ERROR - No user_habit found for habitId=%@", habitUUID.uuidString)
+            throw NSError(domain: "ValidationError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Habit not found"])
+        }
+        
+        NSLog("[SupabaseManager] insertCapture: validated habitId=%@, found templateId=%@", habitUUID.uuidString, userHabit.habitTemplateId.uuidString)
         
         struct InsertCapture: Encodable {
-            let habit_id: UUID  // Changed from user_habit_id to habit_id
+            let habit_template_id: UUID
+            let user_habit_id: UUID   // This is the user_habits.id for streak calculation
             let user_id: UUID
             let image_url: String
             let caption: String?
@@ -1305,43 +1333,77 @@ class SupabaseManager {
         }
         
         let payload = InsertCapture(
-            habit_id: habitUUID,  // Using habit_id instead of user_habit_id
+            habit_template_id: userHabit.habitTemplateId,
+            user_habit_id: habitUUID, // This is the user_habits.id for streak calculation
             user_id: userId, 
             image_url: imageUrl, 
             caption: caption, 
             is_public: isPublic
         )
         
-        NSLog("[SupabaseManager] insertCapture: created payload with habit_id=%@", payload.habit_id.uuidString)
+        NSLog("[SupabaseManager] insertCapture: created payload successfully")
+        
+        NSLog("[SupabaseManager] insertCapture: created payload with habit_template_id=%@, user_habit_id=%@", payload.habit_template_id.uuidString, payload.user_habit_id.uuidString)
         
         do {
-            let rows: [HabitCapture] = try await client.database
+            NSLog("[SupabaseManager] insertCapture: attempting database insert with payload: %@", String(describing: payload))
+            
+            // First, try to insert without selecting to see if the insert works
+            let _ = try await client.database
                 .from("captures")
                 .insert(payload)
+                .execute()
+            
+            NSLog("[SupabaseManager] insertCapture: database insert completed successfully")
+            
+            // Now fetch the inserted record
+            let rows: [HabitCapture] = try await client.database
+                .from("captures")
                 .select()
+                .eq("user_habit_id", value: habitUUID)
+                .eq("user_id", value: userId)
+                .order("created_at", ascending: false)
                 .limit(1)
                 .execute()
                 .value
             
+            NSLog("[SupabaseManager] insertCapture: fetch completed, returned %d rows", rows.count)
+            
             guard let row = rows.first else {
-                NSLog("[SupabaseManager] insertCapture: ERROR - No rows returned from insert")
-                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create capture"])
+                NSLog("[SupabaseManager] insertCapture: ERROR - No rows returned from fetch")
+                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch created capture"])
             }
             
-            NSLog("[SupabaseManager] insertCapture: successfully inserted capture %@ with habitId=%@", row.id.uuidString, row.habitId?.uuidString ?? "nil")
-            
-            // Verify the returned capture has the correct habit_id
-            if row.habitId == nil {
-                NSLog("[SupabaseManager] insertCapture: WARNING - Inserted capture has nil habitId!")
-            } else if row.habitId != habitUUID {
-                NSLog("[SupabaseManager] insertCapture: WARNING - habitId mismatch! Expected=%@, Got=%@", habitUUID.uuidString, row.habitId!.uuidString)
-            } else {
-                NSLog("[SupabaseManager] insertCapture: SUCCESS - habitId matches expected value")
-            }
+            NSLog("[SupabaseManager] insertCapture: successfully inserted capture %@ with habitId=%@, habitTemplateId=%@", 
+                  row.id.uuidString, 
+                  row.habitId?.uuidString ?? "nil", 
+                  row.habitTemplateId?.uuidString ?? "nil")
             
             return row
         } catch {
             NSLog("[SupabaseManager] insertCapture: ERROR during database operation: %@", error.localizedDescription)
+            
+            // Add more detailed error logging
+            if let postgrestError = error as? PostgrestError {
+                NSLog("[SupabaseManager] insertCapture: PostgrestError details: %@", postgrestError.localizedDescription)
+            }
+            
+            // Log the specific decoding error if it's a decoding error
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    NSLog("[SupabaseManager] insertCapture: Missing key '%@' at path %@", key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .typeMismatch(let type, let context):
+                    NSLog("[SupabaseManager] insertCapture: Type mismatch for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .valueNotFound(let type, let context):
+                    NSLog("[SupabaseManager] insertCapture: Value not found for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .dataCorrupted(let context):
+                    NSLog("[SupabaseManager] insertCapture: Data corrupted at path %@: %@", context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                @unknown default:
+                    NSLog("[SupabaseManager] insertCapture: Unknown decoding error")
+                }
+            }
+            
             throw error
         }
     }

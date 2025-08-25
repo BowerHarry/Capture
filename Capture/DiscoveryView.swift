@@ -252,7 +252,12 @@ struct TrendingTabContent: View {
                 searchQuery: searchQuery,
                 onCaptureHabit: { habit in
                     Task {
-                        await habitManager.createHabitFromDiscovery(name: habit.name, category: habit.category)
+                        // Create habit from template instead of just the name
+                        do {
+                            _ = try await habitManager.createHabitFromTemplate(templateId: habit.id)
+                        } catch {
+                            print("Error creating habit from template: \(error)")
+                        }
                     }
                 },
                 habitManager: habitManager

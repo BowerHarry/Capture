@@ -81,6 +81,43 @@ struct Habit: Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Habit Template Model (NEW)
+struct HabitTemplate: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let description: String?
+    let category: String
+    let targetFrequency: String
+    let targetCount: Int?
+    let isActive: Bool
+    let createdAt: Date
+    let updatedAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case category
+        case targetFrequency = "target_frequency"
+        case targetCount = "target_count"
+        case isActive = "is_active"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
+    init(id: UUID = UUID(), name: String, description: String? = nil, category: String, targetFrequency: String, targetCount: Int? = nil, isActive: Bool = true, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.category = category
+        self.targetFrequency = targetFrequency
+        self.targetCount = targetCount
+        self.isActive = isActive
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 struct AvailableHabit: Identifiable, Codable {
     let id: UUID
     let name: String
@@ -383,7 +420,9 @@ struct CreateCaptureRequest: Codable {
 
 struct HabitCapture: Identifiable, Codable {
     let id: UUID
-    let habitId: UUID?
+    let habitId: UUID?           // Keep for backward compatibility
+    let habitTemplateId: UUID?   // NEW: For trending and discovery
+    let userHabitId: UUID?       // NEW: For user-specific operations (user_habits.id)
     let userId: UUID
     let imageUrl: String?
     let caption: String?
@@ -394,6 +433,8 @@ struct HabitCapture: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case habitId = "habit_id"
+        case habitTemplateId = "habit_template_id"  // NEW
+        case userHabitId = "user_habit_id"          // NEW
         case userId = "user_id"
         case imageUrl = "image_url"
         case caption
@@ -402,9 +443,11 @@ struct HabitCapture: Identifiable, Codable {
         case updatedAt = "updated_at"
     }
     
-    init(id: UUID = UUID(), habitId: UUID?, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    init(id: UUID = UUID(), habitId: UUID?, habitTemplateId: UUID?, userHabitId: UUID?, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.habitId = habitId
+        self.habitTemplateId = habitTemplateId
+        self.userHabitId = userHabitId
         self.userId = userId
         self.imageUrl = imageUrl
         self.caption = caption
@@ -413,9 +456,36 @@ struct HabitCapture: Identifiable, Codable {
         self.updatedAt = updatedAt
     }
     
+    // Custom decoding to handle missing fields gracefully
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decode(UUID.self, forKey: .id)
+        habitId = try container.decodeIfPresent(UUID.self, forKey: .habitId)
+        habitTemplateId = try container.decodeIfPresent(UUID.self, forKey: .habitTemplateId)
+        userHabitId = try container.decodeIfPresent(UUID.self, forKey: .userHabitId)
+        userId = try container.decode(UUID.self, forKey: .userId)
+        imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
+        caption = try container.decodeIfPresent(String.self, forKey: .caption)
+        isPublic = try container.decode(Bool.self, forKey: .isPublic)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+    
     // Computed property for backward compatibility with decoupled schema
-    var userHabitId: UUID {
-        return habitId ?? UUID() // Return a default UUID if habitId is nil
+    var userHabitIdForStreak: UUID {
+        // In the new schema, we use user_habit_id instead of habit_id
+        // For backward compatibility, we'll try userHabitId first, then habitId
+        if let userHabitId = self.userHabitId {
+            return userHabitId
+        }
+        if let habitId = habitId {
+            return habitId
+        }
+        // If both are nil, we need to get it from user_habits table using habit_template_id
+        // For now, return a default UUID to prevent crashes, but this indicates a data issue
+        NSLog("[HabitCapture] userHabitIdForStreak: WARNING - both userHabitId and habitId are nil, this indicates a database migration issue")
+        return UUID() // This will cause streak calculation to fail, but prevents crashes
     }
 }
 
@@ -484,7 +554,7 @@ struct PopularHabit: Identifiable, Codable {
 }
 
 struct TrendingHabit: Identifiable, Codable {
-    let id: UUID
+    let id: UUID  // This is now the habit_template_id
     let name: String
     let category: String
     let participants: Int // Unique users who captured this habit in the past week
@@ -581,7 +651,8 @@ struct CaptureLikeCount: Identifiable, Codable {
 
 struct SocialFeedPost: Identifiable, Codable {
     let captureId: UUID
-    let habitId: UUID
+    let habitId: UUID?           // Keep for backward compatibility
+    let habitTemplateId: UUID?   // NEW: For trending and discovery
     let captureUserId: UUID
     let imageUrl: String?
     let caption: String?
@@ -600,6 +671,7 @@ struct SocialFeedPost: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case captureId = "capture_id"
         case habitId = "habit_id"
+        case habitTemplateId = "habit_template_id"  // NEW
         case captureUserId = "capture_user_id"
         case imageUrl = "image_url"
         case caption
@@ -647,46 +719,10 @@ struct UserHabit: Identifiable, Codable {
     }
 }
 
-struct HabitTemplate: Identifiable, Codable {
-    let id: UUID
-    let name: String
-    let description: String?
-    let category: String
-    let targetFrequency: String
-    let targetCount: Int?
-    let isActive: Bool
-    let createdAt: Date
-    let updatedAt: Date
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case description
-        case category
-        case targetFrequency = "target_frequency"
-        case targetCount = "target_count"
-        case isActive = "is_active"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
-    
-    init(id: UUID = UUID(), name: String, description: String? = nil, category: String, targetFrequency: String, targetCount: Int? = nil, isActive: Bool = true, createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.category = category
-        self.targetFrequency = targetFrequency
-        self.targetCount = targetCount
-        self.isActive = isActive
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-}
-
 struct TrendingCapture: Identifiable, Codable {
     let id: UUID
     let captureId: UUID
-    let habitId: UUID
+    let habitTemplateId: UUID    // Changed from habitId
     let userId: UUID
     let imageUrl: String?
     let caption: String?
@@ -703,7 +739,7 @@ struct TrendingCapture: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case captureId = "capture_id"
-        case habitId = "habit_id"
+        case habitTemplateId = "habit_template_id"  // Changed
         case userId = "user_id"
         case imageUrl = "image_url"
         case caption
@@ -718,10 +754,10 @@ struct TrendingCapture: Identifiable, Codable {
         case trendScore = "trend_score"
     }
     
-    init(id: UUID = UUID(), captureId: UUID, habitId: UUID, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, captureCreatedAt: Date = Date(), habitName: String, habitCategory: String, userDisplayName: String? = nil, userAvatarUrl: String? = nil, likeCount: Int = 0, totalCaptures: Int = 0, trendScore: Double = 0.0) {
+    init(id: UUID = UUID(), captureId: UUID, habitTemplateId: UUID, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, captureCreatedAt: Date = Date(), habitName: String, habitCategory: String, userDisplayName: String? = nil, userAvatarUrl: String? = nil, likeCount: Int = 0, totalCaptures: Int = 0, trendScore: Double = 0.0) {
         self.id = id
         self.captureId = captureId
-        self.habitId = habitId
+        self.habitTemplateId = habitTemplateId
         self.userId = userId
         self.imageUrl = imageUrl
         self.caption = caption
@@ -738,6 +774,6 @@ struct TrendingCapture: Identifiable, Codable {
     
     // Computed property for backward compatibility with decoupled schema
     var userHabitId: UUID {
-        return habitId
+        return habitTemplateId
     }
 }

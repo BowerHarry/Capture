@@ -202,7 +202,7 @@ class HabitManager: ObservableObject {
         let todayStart = startOfDay(Date())
 
         for cap in captures {
-            let hId = cap.userHabitId
+            let hId = cap.userHabitIdForStreak
             let dKey = startOfDay(cap.createdAt)
             let wKey = weekKey(for: cap.createdAt)
             let mKey = monthKey(for: cap.createdAt)
@@ -429,7 +429,7 @@ class HabitManager: ObservableObject {
             
             // Log capture details
             for (index, capture) in captures.enumerated() {
-                NSLog("[HabitManager] loadHabits: capture[%d] id=%@, habitId=%@, userHabitId=%@", index, capture.id.uuidString, capture.habitId?.uuidString ?? "nil", capture.userHabitId.uuidString)
+                NSLog("[HabitManager] loadHabits: capture[%d] id=%@, habitId=%@, userHabitId=%@", index, capture.id.uuidString, capture.habitId?.uuidString ?? "nil", capture.userHabitId?.uuidString ?? "nil")
             }
             
             self.captures = captures
@@ -470,6 +470,119 @@ class HabitManager: ObservableObject {
 
     func createHabit(name: String, description: String?, category: String, targetFrequency: String) async {
         // Implementation would go here
+    }
+    
+    // MARK: - Habit Creation from Template
+    
+    func createHabitFromTemplate(templateId: UUID) async throws -> Habit {
+        guard let currentUser = AuthManager.shared.currentUser else {
+            throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        // Check if user already has this habit template
+        let existingUserHabits: [UserHabit] = try await supabaseClient.client
+            .from("user_habits")
+            .select()
+            .eq("user_id", value: currentUser.id)
+            .eq("habit_template_id", value: templateId)
+            .eq("is_active", value: true)
+            .limit(1)
+            .execute()
+            .value
+        
+        if let existingUserHabit = existingUserHabits.first {
+            // User already has this habit, return existing one
+            let template: [HabitTemplate] = try await supabaseClient.client
+                .from("habit_templates")
+                .select()
+                .eq("id", value: templateId)
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let habitTemplate = template.first else {
+                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Habit template not found"])
+            }
+            
+            return Habit(
+                id: existingUserHabit.id,
+                name: habitTemplate.name,
+                icon: nil,
+                color: nil,
+                category: habitTemplate.category,
+                target: habitTemplate.targetCount ?? 1,
+                targetFrequency: habitTemplate.targetFrequency,
+                targetCount: habitTemplate.targetCount,
+                currentStreak: existingUserHabit.currentStreak,
+                longestStreak: 0,
+                isActive: existingUserHabit.isActive,
+                createdAt: existingUserHabit.createdAt,
+                updatedAt: existingUserHabit.updatedAt,
+                userId: existingUserHabit.userId
+            )
+        }
+        
+        // Create new user habit from template
+        struct CreateUserHabit: Encodable {
+            let habit_template_id: UUID
+            let user_id: UUID
+            let current_streak: Int
+            let is_active: Bool
+        }
+        
+        let userHabitPayload = CreateUserHabit(
+            habit_template_id: templateId,
+            user_id: currentUser.id,
+            current_streak: 0,
+            is_active: true
+        )
+        
+        let userHabitRows: [UserHabit] = try await supabaseClient.client
+            .from("user_habits")
+            .insert(userHabitPayload)
+            .select()
+            .limit(1)
+            .execute()
+            .value
+        
+        guard let userHabit = userHabitRows.first else {
+            throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create user habit"])
+        }
+        
+        // Get template details
+        let template: [HabitTemplate] = try await supabaseClient.client
+            .from("habit_templates")
+            .select()
+            .eq("id", value: templateId)
+            .limit(1)
+            .execute()
+            .value
+        
+        guard let habitTemplate = template.first else {
+            throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Habit template not found"])
+        }
+        
+        let newHabit = Habit(
+            id: userHabit.id,
+            name: habitTemplate.name,
+            icon: nil,
+            color: nil,
+            category: habitTemplate.category,
+            target: habitTemplate.targetCount ?? 1,
+            targetFrequency: habitTemplate.targetFrequency,
+            targetCount: habitTemplate.targetCount,
+            currentStreak: userHabit.currentStreak,
+            longestStreak: 0,
+            isActive: userHabit.isActive,
+            createdAt: userHabit.createdAt,
+            updatedAt: userHabit.updatedAt,
+            userId: userHabit.userId
+        )
+        
+        // Add to local habits array
+        habits.append(newHabit)
+        
+        return newHabit
     }
     
     func createHabitFromSuggestion(_ suggestion: AvailableHabit, defaultFrequency: String = "daily") async -> Habit? {
@@ -544,27 +657,35 @@ class HabitManager: ObservableObject {
             NSLog("[HabitManager] createCapture: created public URL %@", publicURL)
             
             NSLog("[HabitManager] createCapture: calling insertCapture with habitId=%@", habitId.uuidString)
-            let created = try await SupabaseManager.shared.insertCapture(habitId: habitId.uuidString, userId: user.id, imageUrl: publicURL, caption: caption, isPublic: isPublic)
-            NSLog("[HabitManager] createCapture: successfully inserted capture %@ with habitId=%@", created.id.uuidString, created.habitId?.uuidString ?? "nil")
-            
-            // Verify the returned capture has the expected habitId
-            if created.habitId != habitId {
-                NSLog("[HabitManager] createCapture: WARNING - habitId mismatch! Expected=%@, Got=%@", habitId.uuidString, created.habitId?.uuidString ?? "nil")
-            } else {
-                NSLog("[HabitManager] createCapture: SUCCESS - habitId matches expected value")
+            do {
+                let created = try await SupabaseManager.shared.insertCapture(habitId: habitId.uuidString, userId: user.id, imageUrl: publicURL, caption: caption, isPublic: isPublic)
+                NSLog("[HabitManager] createCapture: successfully inserted capture %@ with habitId=%@, habitTemplateId=%@", 
+                      created.id.uuidString, 
+                      created.habitId?.uuidString ?? "nil",
+                      created.habitTemplateId?.uuidString ?? "nil")
+                
+                // Verify the returned capture has the expected habitId
+                if created.habitId != habitId {
+                    NSLog("[HabitManager] createCapture: WARNING - habitId mismatch! Expected=%@, Got=%@", habitId.uuidString, created.habitId?.uuidString ?? "nil")
+                } else {
+                    NSLog("[HabitManager] createCapture: SUCCESS - habitId matches expected value")
+                }
+                
+                self.captures.append(created)
+                NSLog("[HabitManager] createCapture: added capture to local array, total captures=%d", self.captures.count)
+                
+                // Reset progress computation and recompute after new capture
+                resetProgressComputation()
+                computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+                
+                // Immediately update best streak after capture
+                await updateUserBestStreak()
+                
+                NSLog("[HabitManager] createCapture: completed successfully")
+            } catch {
+                NSLog("[HabitManager] createCapture: ERROR during insertCapture: %@", error.localizedDescription)
+                throw error
             }
-            
-            self.captures.append(created)
-            NSLog("[HabitManager] createCapture: added capture to local array, total captures=%d", self.captures.count)
-            
-            // Reset progress computation and recompute after new capture
-            resetProgressComputation()
-            computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
-            
-            // Immediately update best streak after capture
-            await updateUserBestStreak()
-            
-            NSLog("[HabitManager] createCapture: completed successfully")
         } catch {
             NSLog("[HabitManager] createCapture: ERROR %@", error.localizedDescription)
             self.errorMessage = error.localizedDescription
@@ -663,7 +784,7 @@ class HabitManager: ObservableObject {
             
             // Log trending capture details
             for (index, capture) in trendingCaptures.enumerated() {
-                NSLog("[HabitManager] loadTrendingHabitsInternal: trendingCapture[%d] id=%@, habitId=%@, likeCount=%d", index, capture.id.uuidString, capture.habitId.uuidString, capture.likeCount)
+                NSLog("[HabitManager] loadTrendingHabitsInternal: trendingCapture[%d] id=%@, habitTemplateId=%@, likeCount=%d", index, capture.id.uuidString, capture.habitTemplateId.uuidString, capture.likeCount)
             }
             
             self.trendingCaptures = trendingCaptures
@@ -674,29 +795,29 @@ class HabitManager: ObservableObject {
         }
     }
     
-    // Helper function to get trending captures for a specific habit
-    func getTrendingCaptures(for habitId: UUID) -> [TrendingCapture] {
-        NSLog("[HabitManager] getTrendingCaptures: filtering for habitId %@", habitId.uuidString)
+    // Helper function to get trending captures for a specific habit template
+    func getTrendingCaptures(for habitTemplateId: UUID) -> [TrendingCapture] {
+        NSLog("[HabitManager] getTrendingCaptures: filtering for habitTemplateId %@", habitTemplateId.uuidString)
         NSLog("[HabitManager] getTrendingCaptures: total trendingCaptures count: %d", trendingCaptures.count)
         
-        // Debug: log the types of objects in trendingCaptures and check for nil habitId
+        // Debug: log the types of objects in trendingCaptures and check for nil habitTemplateId
         for (index, item) in trendingCaptures.enumerated() {
             NSLog("[HabitManager] getTrendingCaptures: item %d type: %@", index, String(describing: type(of: item)))
             if let capture = item as? TrendingCapture {
-                NSLog("[HabitManager] getTrendingCaptures: item %d is TrendingCapture with habitId: %@", index, capture.habitId.uuidString)
+                NSLog("[HabitManager] getTrendingCaptures: item %d is TrendingCapture with habitTemplateId: %@", index, capture.habitTemplateId.uuidString)
             } else {
                 NSLog("[HabitManager] getTrendingCaptures: item %d is NOT TrendingCapture, value: %@", index, String(describing: item))
             }
         }
         
-        let filtered = trendingCaptures.filter { $0.habitId == habitId }
+        let filtered = trendingCaptures.filter { $0.habitTemplateId == habitTemplateId }
         NSLog("[HabitManager] getTrendingCaptures: filtered count: %d", filtered.count)
         return filtered
     }
     
-    // Helper function to get trending capture image URLs for a specific habit
-    func getTrendingCaptureUrls(for habitId: UUID) -> [String] {
-        return getTrendingCaptures(for: habitId).compactMap { $0.imageUrl }
+    // Helper function to get trending capture image URLs for a specific habit template
+    func getTrendingCaptureUrls(for habitTemplateId: UUID) -> [String] {
+        return getTrendingCaptures(for: habitTemplateId).compactMap { $0.imageUrl }
     }
     
     func loadPopularHabits() async {
