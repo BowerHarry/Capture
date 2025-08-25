@@ -70,7 +70,11 @@ struct MainTabView: View {
                             }
                         )
                     case 3:
-                        DiscoveryView()
+                        DiscoveryView(onSwitchToHomeTab: {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                selectedTab = 0
+                            }
+                        })
                             .environmentObject(AuthManager.shared)
                     case 4:
                         ProfileView()

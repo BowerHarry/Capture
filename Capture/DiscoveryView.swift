@@ -11,6 +11,7 @@ struct DiscoveryView: View {
     @State private var allUsers: [User] = []
     @State private var filteredHabits: [AvailableHabit] = []
     @State private var filteredUsers: [User] = []
+    let onSwitchToHomeTab: () -> Void
     
     var body: some View {
         NavigationView {
@@ -55,7 +56,8 @@ struct DiscoveryView: View {
                                 searchQuery: searchQuery,
                                 onSearchQueryChange: { newQuery in
                                     searchQuery = newQuery
-                                }
+                                },
+                                onSwitchToHomeTab: onSwitchToHomeTab
                             )
                             
                             // Bottom spacer for navigation bar
@@ -236,6 +238,7 @@ struct TrendingTabContent: View {
     @StateObject private var imagePreloader = ImagePreloader.shared
     let searchQuery: String
     let onSearchQueryChange: (String) -> Void
+    let onSwitchToHomeTab: () -> Void
     
     var body: some View {
         LazyVStack(spacing: 24) {
@@ -252,11 +255,17 @@ struct TrendingTabContent: View {
                 searchQuery: searchQuery,
                 onCaptureHabit: { habit in
                     Task {
-                        // Create habit from template instead of just the name
+                        // Create habit from template
                         do {
                             _ = try await habitManager.createHabitFromTemplate(templateId: habit.id)
+                            print("✅ Successfully added habit: \(habit.name)")
+                            
+                            // Switch to home tab
+                            DispatchQueue.main.async {
+                                onSwitchToHomeTab()
+                            }
                         } catch {
-                            print("Error creating habit from template: \(error)")
+                            print("❌ Error creating habit from template: \(error)")
                         }
                     }
                 },
@@ -633,11 +642,9 @@ struct TrendingHabitsSection: View {
                     ForEach(habits) { habit in
                         DiscoveryHabitCard(
                             habit: habit,
-                            habitManager: habitManager
+                            habitManager: habitManager,
+                            onCaptureHabit: onCaptureHabit
                         )
-                        .onTapGesture {
-                            onCaptureHabit(habit)
-                        }
                     }
                 }
             }
@@ -656,60 +663,113 @@ struct TrendingHabitsSection: View {
 struct DiscoveryHabitCard: View {
     let habit: TrendingHabit
     @ObservedObject var habitManager: HabitManager
+    let onCaptureHabit: (TrendingHabit) -> Void
+    @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(habit.name)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                    
-                    Text(habit.description ?? "")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                
-                Spacer()
-                
-                // Photo grid
-                let trendingCaptures = habitManager.getTrendingCaptures(for: habit.id)
-                let captureUrls = trendingCaptures.compactMap { $0.imageUrl }
-                
-                let _ = NSLog("[DiscoveryHabitCard] habit: %@, trendingCaptures count: %d, captureUrls count: %d", habit.name, trendingCaptures.count, captureUrls.count)
-                
-                HabitPhotoGrid(captures: captureUrls, habitName: habit.name)
-            }
+        HStack(alignment: .top, spacing: 12) {
+            // Left side: Thumbnails (smaller)
+            let trendingCaptures = habitManager.getTrendingCaptures(for: habit.id)
+            let captureUrls = trendingCaptures.compactMap { $0.imageUrl }
             
-            HStack(spacing: 16) {
-                HStack(spacing: 4) {
-                    Image(systemName: "person.2")
-                        .font(.system(size: 14))
-                    Text("\(habit.participants) participant\(habit.participants == 1 ? "" : "s")")
-                        .font(.caption)
+            let _ = NSLog("[DiscoveryHabitCard] habit: %@, trendingCaptures count: %d, captureUrls count: %d", habit.name, trendingCaptures.count, captureUrls.count)
+            
+            HabitPhotoGrid(captures: captureUrls, habitName: habit.name)
+                .frame(width: 48, height: 48)
+                .clipped()
+                .cornerRadius(8)
+            
+            // Center: Habit details
+            VStack(alignment: .leading, spacing: 8) {
+                // Habit name and category
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(habit.name)
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                        
+                        // Category tag
+                        Text(habit.category)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(categoryColor.opacity(0.2))
+                            .foregroundColor(categoryColor)
+                            .clipShape(Capsule())
+                    }
+                    
+                    Spacer()
+                    
+                    // Right side: Capture button
+                    Button(action: {
+                        onCaptureHabit(habit)
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "camera.aperture")
+                                .font(.caption)
+                            Text("Capture")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.clear)
+                        .foregroundColor(.primary)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.primary, lineWidth: 1)
+                        )
+                    }
                 }
                 
-                HStack(spacing: 4) {
-                    Image(systemName: "flame")
-                        .font(.system(size: 14))
-                    Text("\(String(format: "%.1f", habit.avgStreak)) avg streak")
-                        .font(.caption)
-                }
+                // Description (full width)
+                Text(habit.description)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 
-                HStack(spacing: 4) {
-                    Image(systemName: "camera")
-                        .font(.system(size: 14))
+                // Metrics (simplified, no emojis/icons)
+                HStack(spacing: 16) {
+                    Text("\(habit.participants) participants")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Text("\(Int(habit.avgStreak)) avg streak")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
                     Text("\(habit.totalCaptures) captures")
                         .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
-            .foregroundColor(.secondary)
         }
         .padding(16)
         .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    private var categoryColor: Color {
+        switch habit.category.lowercased() {
+        case "fitness", "health", "exercise":
+            return .green
+        case "productivity", "work", "business":
+            return .blue
+        case "mindfulness", "wellness", "meditation":
+            return .purple
+        case "learning", "education", "study":
+            return .orange
+        case "social", "relationships", "family":
+            return .pink
+        case "finance", "money", "budget":
+            return .mint
+        default:
+            return .gray
+        }
     }
 }
 
@@ -983,8 +1043,9 @@ struct StatItem: View {
 }
 
 #Preview {
-    DiscoveryView()
+    DiscoveryView(onSwitchToHomeTab: {})
         .environmentObject(HabitManager.shared)
+        .environmentObject(AuthManager.shared)
 }
 
 // MARK: - Shared Components
