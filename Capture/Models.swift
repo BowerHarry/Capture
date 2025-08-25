@@ -557,16 +557,18 @@ struct TrendingHabit: Identifiable, Codable {
     let id: UUID  // This is now the habit_template_id
     let name: String
     let category: String
+    let categoryColor: String? // New field from the category system
     let participants: Int // Unique users who captured this habit in the past week
     let avgStreak: Double // Average current streak for participants
     let description: String // AI-generated description
     let captures: [String]? // Array of photo URLs from the past week
     let totalCaptures: Int // Total captures in the past week
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case category
+        case categoryColor = "category_color"
         case participants
         case avgStreak = "avg_streak"
         case description
@@ -574,15 +576,29 @@ struct TrendingHabit: Identifiable, Codable {
         case totalCaptures = "total_captures"
     }
     
-    init(id: UUID = UUID(), name: String, category: String, participants: Int, avgStreak: Double, description: String, captures: [String]? = nil, totalCaptures: Int = 0) {
+    init(id: UUID, name: String, category: String, categoryColor: String? = nil, participants: Int, avgStreak: Double, description: String, captures: [String]? = nil, totalCaptures: Int) {
         self.id = id
         self.name = name
         self.category = category
+        self.categoryColor = categoryColor
         self.participants = participants
         self.avgStreak = avgStreak
         self.description = description
         self.captures = captures
         self.totalCaptures = totalCaptures
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        category = try container.decode(String.self, forKey: .category)
+        categoryColor = try container.decodeIfPresent(String.self, forKey: .categoryColor)
+        participants = try container.decode(Int.self, forKey: .participants)
+        avgStreak = try container.decode(Double.self, forKey: .avgStreak)
+        description = try container.decode(String.self, forKey: .description)
+        captures = try container.decodeIfPresent([String].self, forKey: .captures)
+        totalCaptures = try container.decode(Int.self, forKey: .totalCaptures)
     }
 }
 
@@ -598,16 +614,51 @@ struct CommunityStats: Codable {
     }
 }
 
-struct DiscoveryHabitCategory: Identifiable {
-    let id = UUID()
+// MARK: - Database Habit Categories
+
+struct DatabaseHabitCategory: Identifiable, Codable {
+    let id: UUID
     let name: String
-    let count: Int
+    let description: String?
     let color: String
+    let icon: String?
+    let sortOrder: Int
     
-    init(name: String, count: Int = 0, color: String) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case color
+        case icon
+        case sortOrder = "sort_order"
+    }
+}
+
+// MARK: - Discovery Habit Category (for backward compatibility)
+struct DiscoveryHabitCategory: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let color: String
+    let description: String?
+    let icon: String?
+    let sortOrder: Int
+    
+    init(from habitCategory: DatabaseHabitCategory) {
+        self.id = habitCategory.id
+        self.name = habitCategory.name
+        self.color = habitCategory.color
+        self.description = habitCategory.description
+        self.icon = habitCategory.icon
+        self.sortOrder = habitCategory.sortOrder
+    }
+    
+    init(id: UUID, name: String, color: String, description: String? = nil, icon: String? = nil, sortOrder: Int = 0) {
+        self.id = id
         self.name = name
-        self.count = count
         self.color = color
+        self.description = description
+        self.icon = icon
+        self.sortOrder = sortOrder
     }
 }
 
@@ -730,12 +781,13 @@ struct TrendingCapture: Identifiable, Codable {
     let captureCreatedAt: Date
     let habitName: String
     let habitCategory: String
+    let habitCategoryId: UUID?   // New field from the category system
     let userDisplayName: String?
     let userAvatarUrl: String?
     let likeCount: Int
     let totalCaptures: Int
     let trendScore: Double
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case captureId = "capture_id"
@@ -747,6 +799,7 @@ struct TrendingCapture: Identifiable, Codable {
         case captureCreatedAt = "capture_created_at"
         case habitName = "habit_name"
         case habitCategory = "habit_category"
+        case habitCategoryId = "habit_category_id"  // New field
         case userDisplayName = "user_display_name"
         case userAvatarUrl = "user_avatar_url"
         case likeCount = "like_count"
@@ -754,7 +807,7 @@ struct TrendingCapture: Identifiable, Codable {
         case trendScore = "trend_score"
     }
     
-    init(id: UUID = UUID(), captureId: UUID, habitTemplateId: UUID, userId: UUID, imageUrl: String? = nil, caption: String? = nil, isPublic: Bool = false, captureCreatedAt: Date = Date(), habitName: String, habitCategory: String, userDisplayName: String? = nil, userAvatarUrl: String? = nil, likeCount: Int = 0, totalCaptures: Int = 0, trendScore: Double = 0.0) {
+    init(id: UUID, captureId: UUID, habitTemplateId: UUID, userId: UUID, imageUrl: String?, caption: String?, isPublic: Bool, captureCreatedAt: Date, habitName: String, habitCategory: String, habitCategoryId: UUID?, userDisplayName: String?, userAvatarUrl: String?, likeCount: Int, totalCaptures: Int, trendScore: Double) {
         self.id = id
         self.captureId = captureId
         self.habitTemplateId = habitTemplateId
@@ -765,6 +818,7 @@ struct TrendingCapture: Identifiable, Codable {
         self.captureCreatedAt = captureCreatedAt
         self.habitName = habitName
         self.habitCategory = habitCategory
+        self.habitCategoryId = habitCategoryId
         self.userDisplayName = userDisplayName
         self.userAvatarUrl = userAvatarUrl
         self.likeCount = likeCount
@@ -772,8 +826,23 @@ struct TrendingCapture: Identifiable, Codable {
         self.trendScore = trendScore
     }
     
-    // Computed property for backward compatibility with decoupled schema
-    var userHabitId: UUID {
-        return habitTemplateId
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        captureId = try container.decode(UUID.self, forKey: .captureId)
+        habitTemplateId = try container.decode(UUID.self, forKey: .habitTemplateId)
+        userId = try container.decode(UUID.self, forKey: .userId)
+        imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
+        caption = try container.decodeIfPresent(String.self, forKey: .caption)
+        isPublic = try container.decode(Bool.self, forKey: .isPublic)
+        captureCreatedAt = try container.decode(Date.self, forKey: .captureCreatedAt)
+        habitName = try container.decode(String.self, forKey: .habitName)
+        habitCategory = try container.decode(String.self, forKey: .habitCategory)
+        habitCategoryId = try container.decodeIfPresent(UUID.self, forKey: .habitCategoryId)
+        userDisplayName = try container.decodeIfPresent(String.self, forKey: .userDisplayName)
+        userAvatarUrl = try container.decodeIfPresent(String.self, forKey: .userAvatarUrl)
+        likeCount = try container.decode(Int.self, forKey: .likeCount)
+        totalCaptures = try container.decode(Int.self, forKey: .totalCaptures)
+        trendScore = try container.decode(Double.self, forKey: .trendScore)
     }
 }

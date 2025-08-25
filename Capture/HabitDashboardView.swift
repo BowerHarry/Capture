@@ -326,7 +326,14 @@ struct HabitDashboardView: View {
         return quotes.randomElement() ?? "Keep going!"
     }
     
+    // Utility function for consistent category colors
     private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Fallback to the existing mapping
         switch category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness
@@ -738,6 +745,12 @@ private struct CollapsedHabitsList: View {
     }
     
     private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Fallback to the existing mapping
         switch category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness
@@ -848,6 +861,12 @@ private struct ExpandedHabitsList: View {
     }
     
     private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Fallback to the existing mapping
         switch category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness
@@ -972,6 +991,12 @@ private struct ProgressGridList: View {
     }
     
     private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Fallback to the existing mapping
         switch category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness
@@ -1090,6 +1115,12 @@ private struct GridCell: View {
     }
     
     private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Fallback to the existing mapping
         switch category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness

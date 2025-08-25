@@ -19,7 +19,8 @@ class HabitManager: ObservableObject {
     @Published var trendingHabits: [TrendingHabit] = []
     @Published var trendingCaptures: [TrendingCapture] = []
     @Published var communityStats = CommunityStats()
-    @Published var categories: [DiscoveryHabitCategory] = []
+    @Published var habitCategories: [DatabaseHabitCategory] = []
+    @Published var categories: [DiscoveryHabitCategory] = [] // For backward compatibility
 
     // Progress and streaks
     struct HabitProgressState {
@@ -751,6 +752,23 @@ class HabitManager: ObservableObject {
     
     // MARK: - Discovery Methods
     
+    func loadHabitCategories() async {
+        NSLog("[HabitManager] loadHabitCategories: loading habit categories from database")
+        
+        do {
+            let categories = try await supabaseClient.getHabitCategories()
+            NSLog("[HabitManager] loadHabitCategories: successfully fetched %d habit categories", categories.count)
+            
+            // Update both the new and legacy category arrays
+            self.habitCategories = categories
+            self.categories = categories.map { DiscoveryHabitCategory(from: $0) }
+            
+            NSLog("[HabitManager] loadHabitCategories: updated categories array with %d items", self.categories.count)
+        } catch {
+            NSLog("[HabitManager] loadHabitCategories: error %@", error.localizedDescription)
+        }
+    }
+    
     func loadTrendingHabits() async {
         // Prevent duplicate calls
         if isLoading {
@@ -759,6 +777,40 @@ class HabitManager: ObservableObject {
         }
         
         await loadTrendingHabitsInternal()
+    }
+    
+    func loadTrendingHabitsByCategoryId(_ categoryId: UUID) async {
+        NSLog("[HabitManager] loadTrendingHabitsByCategoryId: loading trending habits for category ID '%@'", categoryId.uuidString)
+        isLoadingTrending = true
+        defer { isLoadingTrending = false }
+        
+        do {
+            let trendingHabits = try await supabaseClient.getTrendingHabitsByCategoryId(categoryId)
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: successfully fetched %d trending habits for category ID '%@'", trendingHabits.count, categoryId.uuidString)
+            
+            // Log each trending habit's details
+            for (index, habit) in trendingHabits.enumerated() {
+                NSLog("[HabitManager] loadTrendingHabitsByCategoryId: trending[%d] id=%@, name=%@, totalCaptures=%d, participants=%d", index, habit.id.uuidString, habit.name, habit.totalCaptures, habit.participants)
+            }
+            
+            self.trendingHabits = trendingHabits
+            
+            // Load trending captures for these habits
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: loading trending captures")
+            let trendingCaptures = try await supabaseClient.getTrendingCapturesForHabits()
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: successfully fetched %d trending captures", trendingCaptures.count)
+            
+            // Filter captures to only include those for the habits in this category
+            let habitTemplateIds = Set(trendingHabits.map { $0.id })
+            let filteredCaptures = trendingCaptures.filter { habitTemplateIds.contains($0.habitTemplateId) }
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: filtered to %d captures for category ID '%@'", filteredCaptures.count, categoryId.uuidString)
+            
+            self.trendingCaptures = filteredCaptures
+            
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: completed successfully for category ID '%@'", categoryId.uuidString)
+        } catch {
+            NSLog("[HabitManager] loadTrendingHabitsByCategoryId: error %@", error.localizedDescription)
+        }
     }
     
     private func loadTrendingHabitsInternal() async {
@@ -828,13 +880,13 @@ class HabitManager: ObservableObject {
         do {
             // Initialize categories
             let initialCategories = [
-                DiscoveryHabitCategory(name: "Fitness", color: "blue"),
-                DiscoveryHabitCategory(name: "Wellness", color: "green"),
-                DiscoveryHabitCategory(name: "Learning", color: "purple"),
-                DiscoveryHabitCategory(name: "Nutrition", color: "orange"),
-                DiscoveryHabitCategory(name: "Productivity", color: "red"),
-                DiscoveryHabitCategory(name: "Health", color: "pink"),
-                DiscoveryHabitCategory(name: "Social", color: "yellow")
+                DiscoveryHabitCategory(id: UUID(), name: "Fitness", color: "blue"),
+                DiscoveryHabitCategory(id: UUID(), name: "Wellness", color: "green"),
+                DiscoveryHabitCategory(id: UUID(), name: "Learning", color: "purple"),
+                DiscoveryHabitCategory(id: UUID(), name: "Nutrition", color: "orange"),
+                DiscoveryHabitCategory(id: UUID(), name: "Productivity", color: "red"),
+                DiscoveryHabitCategory(id: UUID(), name: "Health", color: "pink"),
+                DiscoveryHabitCategory(id: UUID(), name: "Social", color: "yellow")
             ]
             
             // For now, we'll create mock data since we don't have the API endpoint yet
@@ -901,7 +953,7 @@ class HabitManager: ObservableObject {
                 let count = mockPopularHabits
                     .filter { $0.category == category.name }
                     .reduce(0) { $0 + $1.participants }
-                return DiscoveryHabitCategory(name: category.name, count: count, color: category.color)
+                return DiscoveryHabitCategory(id: category.id, name: category.name, color: category.color)
             }
             self.categories = updatedCategories
             

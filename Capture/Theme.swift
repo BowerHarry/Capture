@@ -20,6 +20,30 @@ struct CaptureTheme {
         static let health = Color(hex: "#ec4899")
         static let social = Color(hex: "#eab308")
     }
+    
+    // Utility function to get consistent category colors from database color strings
+    static func categoryColor(from colorString: String?) -> Color {
+        guard let colorString = colorString else { return .gray }
+        
+        switch colorString.lowercased() {
+        case "red", "fitness":
+            return Palette.fitness
+        case "green", "wellness":
+            return Palette.wellness
+        case "blue", "learning":
+            return Palette.learning
+        case "orange", "nutrition":
+            return Palette.nutrition
+        case "purple", "productivity":
+            return Palette.productivity
+        case "pink", "health":
+            return Palette.health
+        case "yellow", "social":
+            return Palette.social
+        default:
+            return .gray
+        }
+    }
 
     struct Gradients {
         static let header = LinearGradient(

@@ -767,6 +767,154 @@ class SupabaseManager {
         }
     }
     
+    func getTrendingHabitsByCategory(_ category: String) async throws -> [TrendingHabit] {
+        NSLog("[SupabaseManager] getTrendingHabitsByCategory: fetching trending habits for category '%@'", category)
+        
+        // Map UI category names to database category names
+        let mappedCategory = mapUICategoryToDatabaseCategory(category)
+        NSLog("[SupabaseManager] getTrendingHabitsByCategory: mapped '%@' to '%@'", category, mappedCategory)
+        
+        do {
+            // First try to filter by category in the database
+            let rows: [TrendingHabit] = try await client.database
+                .from("trending_habits_view")
+                .select()
+                .eq("category", value: mappedCategory)
+                .order("participants", ascending: false)
+                .order("total_captures", ascending: false)
+                .limit(5)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getTrendingHabitsByCategory: successfully fetched %d trending habits for category '%@' (mapped from '%@')", rows.count, mappedCategory, category)
+            
+            // If we got results, return them
+            if !rows.isEmpty {
+                return rows
+            }
+            
+            // If no results, try fetching all trending habits and filtering by category on client side
+            NSLog("[SupabaseManager] getTrendingHabitsByCategory: no results for category '%@', trying client-side filtering", category)
+            
+            let allRows: [TrendingHabit] = try await client.database
+                .from("trending_habits_view")
+                .select()
+                .order("participants", ascending: false)
+                .order("total_captures", ascending: false)
+                .limit(20) // Get more habits to filter from
+                .execute()
+                .value
+            
+            // Filter by category using flexible matching
+            let filteredRows = allRows.filter { habit in
+                matchesCategory(habit: habit, targetCategory: category)
+            }
+            
+            NSLog("[SupabaseManager] getTrendingHabitsByCategory: client-side filtering found %d habits for category '%@'", filteredRows.count, category)
+            
+            return Array(filteredRows.prefix(5)) // Return top 5
+            
+        } catch {
+            NSLog("[SupabaseManager] getTrendingHabitsByCategory: error %@, falling back to available habits for category '%@'", error.localizedDescription, category)
+            
+            // Fallback: Use available_habits filtered by category
+            let availableHabits: [AvailableHabit] = try await client.database
+                .from("available_habits")
+                .select()
+                .eq("category", value: mappedCategory)
+                .order("is_default", ascending: false)
+                .limit(5)
+                .execute()
+                .value
+            
+            // Convert AvailableHabit to TrendingHabit
+            let trendingHabits = availableHabits.map { habit in
+                TrendingHabit(
+                    id: habit.id,
+                    name: habit.name,
+                    category: habit.category,
+                    participants: Int.random(in: 50...500), // Mock data for now
+                    avgStreak: Double.random(in: 3.0...15.0), // Mock data for now
+                    description: habit.description ?? "A popular habit that many people are trying to build.",
+                    captures: [], // Will be populated by trending captures
+                    totalCaptures: Int.random(in: 100...1000) // Mock data for now
+                )
+            }
+            
+            NSLog("[SupabaseManager] getTrendingHabitsByCategory: using fallback data with %d habits for category '%@'", trendingHabits.count, category)
+            return trendingHabits
+        }
+    }
+    
+    // Helper function to check if a habit matches a target category
+    private func matchesCategory(habit: TrendingHabit, targetCategory: String) -> Bool {
+        let lowercasedTarget = targetCategory.lowercased()
+        let lowercasedHabitCategory = habit.category.lowercased()
+        let lowercasedHabitName = habit.name.lowercased()
+        
+        // First check if the habit category matches
+        if lowercasedHabitCategory == lowercasedTarget {
+            return true
+        }
+        
+        // Then check if the habit name suggests the target category
+        switch lowercasedTarget {
+        case "fitness":
+            return lowercasedHabitName.contains("steps") || lowercasedHabitName.contains("workout") ||
+                   lowercasedHabitName.contains("exercise") || lowercasedHabitName.contains("run") ||
+                   lowercasedHabitName.contains("gym") || lowercasedHabitName.contains("fitness")
+        case "learning":
+            return lowercasedHabitName.contains("read") || lowercasedHabitName.contains("learn") ||
+                   lowercasedHabitName.contains("study") || lowercasedHabitName.contains("language") ||
+                   lowercasedHabitName.contains("book") || lowercasedHabitName.contains("course")
+        case "health":
+            return lowercasedHabitName.contains("water") || lowercasedHabitName.contains("meal") ||
+                   lowercasedHabitName.contains("diet") || lowercasedHabitName.contains("nutrition") ||
+                   lowercasedHabitName.contains("vitamin") || lowercasedHabitName.contains("healthy")
+        case "wellness":
+            return lowercasedHabitName.contains("meditation") || lowercasedHabitName.contains("journal") ||
+                   lowercasedHabitName.contains("sleep") || lowercasedHabitName.contains("mindfulness") ||
+                   lowercasedHabitName.contains("breathing") || lowercasedHabitName.contains("yoga")
+        case "productivity":
+            return lowercasedHabitName.contains("work") || lowercasedHabitName.contains("productivity") ||
+                   lowercasedHabitName.contains("focus") || lowercasedHabitName.contains("task") ||
+                   lowercasedHabitName.contains("goal") || lowercasedHabitName.contains("plan")
+        case "social":
+            return lowercasedHabitName.contains("social") || lowercasedHabitName.contains("friend") ||
+                   lowercasedHabitName.contains("family") || lowercasedHabitName.contains("call") ||
+                   lowercasedHabitName.contains("meet") || lowercasedHabitName.contains("connect")
+        case "nutrition":
+            return lowercasedHabitName.contains("water") || lowercasedHabitName.contains("meal") ||
+                   lowercasedHabitName.contains("diet") || lowercasedHabitName.contains("nutrition") ||
+                   lowercasedHabitName.contains("vitamin") || lowercasedHabitName.contains("healthy")
+        default:
+            return false
+        }
+    }
+    
+    // Helper function to map UI category names to database category names
+    private func mapUICategoryToDatabaseCategory(_ uiCategory: String) -> String {
+        switch uiCategory.lowercased() {
+        case "fitness":
+            return "Fitness"
+        case "wellness":
+            return "Wellness"
+        case "learning":
+            return "Learning"
+        case "nutrition":
+            return "Nutrition"
+        case "productivity":
+            return "Productivity"
+        case "health":
+            return "Health"
+        case "social":
+            return "Social"
+        default:
+            // If no mapping found, try the original category name
+            return uiCategory
+        }
+    }
+    
     // MARK: - Trending Captures
     func getTrendingCapturesForHabits() async throws -> [TrendingCapture] {
         NSLog("[SupabaseManager] getTrendingCapturesForHabits: fetching trending captures from RPC function")
@@ -844,6 +992,7 @@ class SupabaseManager {
                     captureCreatedAt: capture.createdAt,
                     habitName: "Unknown Habit", // We'll need to join with habits table
                     habitCategory: "General",
+                    habitCategoryId: nil, // Add the missing parameter
                     userDisplayName: nil,
                     userAvatarUrl: nil,
                     likeCount: 0,
@@ -1456,4 +1605,50 @@ struct AnyEncodable: Encodable {
         try encodeFunc(encoder)
     }
 }
+
+    // MARK: - Habit Categories
+    
+    func getHabitCategories() async throws -> [DatabaseHabitCategory] {
+        NSLog("[SupabaseManager] getHabitCategories: fetching habit categories from database")
+        
+        do {
+            let categories: [DatabaseHabitCategory] = try await client.database
+                .rpc("get_habit_categories")
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getHabitCategories: successfully fetched %d habit categories", categories.count)
+            return categories
+        } catch {
+            NSLog("[SupabaseManager] getHabitCategories: error %@, falling back to hardcoded categories", error.localizedDescription)
+            
+            // Fallback to hardcoded categories if the function doesn't exist yet
+            return [
+                DatabaseHabitCategory(id: UUID(), name: "Fitness", description: "Physical exercise and movement habits", color: "green", icon: "dumbbell", sortOrder: 1),
+                DatabaseHabitCategory(id: UUID(), name: "Wellness", description: "Mental health and mindfulness habits", color: "purple", icon: "heart", sortOrder: 2),
+                DatabaseHabitCategory(id: UUID(), name: "Learning", description: "Educational and skill-building habits", color: "orange", icon: "book", sortOrder: 3),
+                DatabaseHabitCategory(id: UUID(), name: "Nutrition", description: "Diet and eating habits", color: "mint", icon: "apple", sortOrder: 4),
+                DatabaseHabitCategory(id: UUID(), name: "Productivity", description: "Work and efficiency habits", color: "blue", icon: "briefcase", sortOrder: 5),
+                DatabaseHabitCategory(id: UUID(), name: "Health", description: "General health and medical habits", color: "pink", icon: "cross", sortOrder: 6),
+                DatabaseHabitCategory(id: UUID(), name: "Social", description: "Relationship and communication habits", color: "yellow", icon: "users", sortOrder: 7)
+            ]
+        }
+    }
+    
+    func getTrendingHabitsByCategoryId(_ categoryId: UUID) async throws -> [TrendingHabit] {
+        NSLog("[SupabaseManager] getTrendingHabitsByCategoryId: fetching trending habits for category ID '%@'", categoryId.uuidString)
+        
+        do {
+            let rows: [TrendingHabit] = try await client.database
+                .rpc("get_trending_habits_by_category", params: ["category_id_param": categoryId])
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getTrendingHabitsByCategoryId: successfully fetched %d trending habits for category ID '%@'", rows.count, categoryId.uuidString)
+            return rows
+        } catch {
+            NSLog("[SupabaseManager] getTrendingHabitsByCategoryId: error %@", error.localizedDescription)
+            throw error
+        }
+    }
 }

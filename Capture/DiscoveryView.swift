@@ -7,6 +7,7 @@ struct DiscoveryView: View {
     @State private var searchQuery = ""
     @State private var isLoading = false
     @State private var selectedTab = 0 // 0: Trending, 1: Habits, 2: Users
+    @State private var selectedCategoryId: UUID? = nil // Track selected category ID for trending
     @State private var allHabits: [AvailableHabit] = []
     @State private var allUsers: [User] = []
     @State private var filteredHabits: [AvailableHabit] = []
@@ -57,7 +58,8 @@ struct DiscoveryView: View {
                                 onSearchQueryChange: { newQuery in
                                     searchQuery = newQuery
                                 },
-                                onSwitchToHomeTab: onSwitchToHomeTab
+                                onSwitchToHomeTab: onSwitchToHomeTab,
+                                selectedCategoryId: $selectedCategoryId
                             )
                             
                             // Bottom spacer for navigation bar
@@ -119,38 +121,40 @@ struct DiscoveryView: View {
             )
             .navigationBarHidden(true)
             .task {
-                await loadInitialData()
+                await loadDiscoveryData()
             }
             .onAppear {
-                Task {
-                    await loadInitialData()
-                }
+                preloadDiscoveryImages()
             }
             .refreshable {
-                await loadInitialData()
+                await loadDiscoveryData()
             }
         }
     }
     
-
-    
-    private func loadInitialData() async {
-        await habitManager.loadTrendingHabits()
-        await habitManager.loadPopularHabits()
-        await loadAllHabits()
-        await loadAllUsers()
+    private func loadDiscoveryData() async {
+        isLoading = true
+        defer { isLoading = false }
         
-        // Preload images after data is loaded
-        preloadDiscoveryImages()
+        // Load categories first
+        await habitManager.loadHabitCategories()
+        
+        // Load trending habits
+        await habitManager.loadTrendingHabits()
+        
+        // Load other data
+        await habitManager.loadPopularHabits()
+        await loadAvailableHabits()
+        await loadUsers()
     }
     
-    private func loadAllHabits() async {
+    private func loadAvailableHabits() async {
         // This will be implemented with Supabase query
         allHabits = await habitManager.getAllHabits()
         filteredHabits = allHabits
     }
     
-    private func loadAllUsers() async {
+    private func loadUsers() async {
         // This will be implemented with Supabase query
         allUsers = await habitManager.getAllUsers()
         // Don't populate filteredUsers initially - only show results when user searches
@@ -239,6 +243,7 @@ struct TrendingTabContent: View {
     let searchQuery: String
     let onSearchQueryChange: (String) -> Void
     let onSwitchToHomeTab: () -> Void
+    @Binding var selectedCategoryId: UUID?
     
     var body: some View {
         LazyVStack(spacing: 24) {
@@ -246,7 +251,8 @@ struct TrendingTabContent: View {
             CategoriesSection(
                 categories: habitManager.categories,
                 searchQuery: .constant(searchQuery),
-                onSearchQueryChange: onSearchQueryChange
+                onSearchQueryChange: onSearchQueryChange,
+                selectedCategoryId: $selectedCategoryId
             )
             
             // Trending Habits
@@ -269,7 +275,11 @@ struct TrendingTabContent: View {
                         }
                     }
                 },
-                habitManager: habitManager
+                habitManager: habitManager,
+                selectedCategoryId: selectedCategoryId,
+                onClearCategory: {
+                    selectedCategoryId = nil
+                }
             )
             
             // Community Stats
@@ -285,16 +295,16 @@ struct TrendingTabContent: View {
             // Ensure images are preloaded when the view appears
             preloadTrendingImages()
         }
-    }
-    
-    private func preloadTrendingImages() {
-        // Preload trending thumbnails with caching
-        let allCaptures = habitManager.trendingCaptures.compactMap { $0.imageUrl }
-        if !allCaptures.isEmpty {
-            // Preload all trending thumbnails in the background
-            Task {
-                for url in allCaptures {
-                    _ = await imagePreloader.getTrendingThumbnail(for: url, size: CGSize(width: 64, height: 64))
+        .onChange(of: selectedCategoryId) { newCategoryId in
+            // Load trending habits by category when category changes
+            if let categoryId = newCategoryId {
+                Task {
+                    await habitManager.loadTrendingHabitsByCategoryId(categoryId)
+                }
+            } else {
+                // Load all trending habits when no category is selected
+                Task {
+                    await habitManager.loadTrendingHabits()
                 }
             }
         }
@@ -307,6 +317,19 @@ struct TrendingTabContent: View {
             return habitManager.trendingHabits.filter { habit in
                 habit.name.localizedCaseInsensitiveContains(searchQuery) ||
                 habit.category.localizedCaseInsensitiveContains(searchQuery)
+            }
+        }
+    }
+    
+    private func preloadTrendingImages() {
+        // Preload trending thumbnails with caching
+        let allCaptures = habitManager.trendingCaptures.compactMap { $0.imageUrl }
+        if !allCaptures.isEmpty {
+            // Preload all trending thumbnails in the background
+            Task {
+                for url in allCaptures {
+                    _ = await imagePreloader.getTrendingThumbnail(for: url, size: CGSize(width: 64, height: 64))
+                }
             }
         }
     }
@@ -545,11 +568,13 @@ struct CategoriesSection: View {
     let categories: [DiscoveryHabitCategory]
     @Binding var searchQuery: String
     let onSearchQueryChange: ((String) -> Void)?
+    @Binding var selectedCategoryId: UUID?
     
-    init(categories: [DiscoveryHabitCategory], searchQuery: Binding<String>, onSearchQueryChange: ((String) -> Void)? = nil) {
+    init(categories: [DiscoveryHabitCategory], searchQuery: Binding<String>, onSearchQueryChange: ((String) -> Void)? = nil, selectedCategoryId: Binding<UUID?>) {
         self.categories = categories
         self._searchQuery = searchQuery
         self.onSearchQueryChange = onSearchQueryChange
+        self._selectedCategoryId = selectedCategoryId
     }
     
     var body: some View {
@@ -561,12 +586,24 @@ struct CategoriesSection: View {
             CategoryFlowLayout(categories: categories) { category in
                 CategoryBadge(
                     category: category,
+                    isSelected: selectedCategoryId == category.id,
                     onTap: {
-                        let newQuery = category.name.lowercased()
-                        if let onSearchQueryChange = onSearchQueryChange {
-                            onSearchQueryChange(newQuery)
+                        if selectedCategoryId == category.id {
+                            // If already selected, unselect it
+                            selectedCategoryId = nil
+                            if let onSearchQueryChange = onSearchQueryChange {
+                                onSearchQueryChange("")
+                            } else {
+                                searchQuery = ""
+                            }
                         } else {
-                            searchQuery = newQuery
+                            // Select the new category
+                            selectedCategoryId = category.id
+                            if let onSearchQueryChange = onSearchQueryChange {
+                                onSearchQueryChange(category.name)
+                            } else {
+                                searchQuery = category.name
+                            }
                         }
                     }
                 )
@@ -577,6 +614,7 @@ struct CategoriesSection: View {
 
 struct CategoryBadge: View {
     let category: DiscoveryHabitCategory
+    let isSelected: Bool
     let onTap: () -> Void
     
     var body: some View {
@@ -587,37 +625,15 @@ struct CategoryBadge: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .frame(height: 32)
-                .background(categoryColor(for: category.color))
-                .foregroundColor(categoryTextColor(for: category.color))
+                .background(isSelected ? CaptureTheme.categoryColor(from: category.color) : CaptureTheme.categoryColor(from: category.color).opacity(0.3))
+                .foregroundColor(isSelected ? .white : CaptureTheme.categoryColor(from: category.color))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? CaptureTheme.categoryColor(from: category.color) : Color.clear, lineWidth: 2)
+                )
                 .cornerRadius(8)
         }
         .fixedSize(horizontal: true, vertical: false)
-    }
-    
-    private func categoryColor(for colorName: String) -> Color {
-        switch colorName.lowercased() {
-        case "blue": return Color.blue.opacity(0.1)
-        case "green": return Color.green.opacity(0.1)
-        case "purple": return Color.purple.opacity(0.1)
-        case "orange": return Color.orange.opacity(0.1)
-        case "red": return Color.red.opacity(0.1)
-        case "pink": return Color.pink.opacity(0.1)
-        case "yellow": return Color.yellow.opacity(0.1)
-        default: return Color.gray.opacity(0.1)
-        }
-    }
-    
-    private func categoryTextColor(for colorName: String) -> Color {
-        switch colorName.lowercased() {
-        case "blue": return .blue
-        case "green": return .green
-        case "purple": return .purple
-        case "orange": return .orange
-        case "red": return .red
-        case "pink": return .pink
-        case "yellow": return .orange
-        default: return .primary
-        }
     }
 }
 
@@ -628,12 +644,26 @@ struct TrendingHabitsSection: View {
     let searchQuery: String
     let onCaptureHabit: (TrendingHabit) -> Void
     @ObservedObject var habitManager: HabitManager
+    let selectedCategoryId: UUID?
+    let onClearCategory: (() -> Void)?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(sectionTitle)
-                .font(.title2)
-                .fontWeight(.medium)
+            HStack {
+                Text(sectionTitle)
+                    .font(.title2)
+                    .fontWeight(.medium)
+                
+                Spacer()
+                
+                if let selectedCategoryId = selectedCategoryId {
+                    Button("Clear") {
+                        onClearCategory?()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
             
             if habits.isEmpty {
                 DiscoveryEmptyStateCard(searchQuery: searchQuery)
@@ -652,10 +682,13 @@ struct TrendingHabitsSection: View {
     }
     
     private var sectionTitle: String {
-        if searchQuery.isEmpty {
-            return "Trending Habits"
+        if let selectedCategoryId = selectedCategoryId {
+            // Find the selected category name
+            let selectedCategory = habitManager.habitCategories.first { $0.id == selectedCategoryId }
+            let categoryName = selectedCategory?.name ?? "Category"
+            return "Top \(categoryName) Habits"
         } else {
-            return "Search Results for \"\(searchQuery)\""
+            return "Trending Habits"
         }
     }
 }
@@ -695,8 +728,8 @@ struct DiscoveryHabitCard: View {
                             .fontWeight(.medium)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
-                            .background(categoryColor.opacity(0.2))
-                            .foregroundColor(categoryColor)
+                            .background(CaptureTheme.categoryColor(from: habit.categoryColor).opacity(0.2))
+                            .foregroundColor(CaptureTheme.categoryColor(from: habit.categoryColor))
                             .clipShape(Capsule())
                     }
                     
@@ -754,22 +787,78 @@ struct DiscoveryHabitCard: View {
     }
     
     private var categoryColor: Color {
-        switch habit.category.lowercased() {
-        case "fitness", "health", "exercise":
-            return .green
-        case "productivity", "work", "business":
-            return .blue
-        case "mindfulness", "wellness", "meditation":
-            return .purple
-        case "learning", "education", "study":
-            return .orange
-        case "social", "relationships", "family":
-            return .pink
-        case "finance", "money", "budget":
-            return .mint
-        default:
-            return .gray
+        // Use the category color from the database if available
+        if let categoryColorString = habit.categoryColor {
+            return CaptureTheme.categoryColor(from: categoryColorString)
         }
+        
+        // Fallback to inferring from habit name if no category color is available
+        return inferCategoryColorFromHabitName(habit.name)
+    }
+    
+    private func colorFromString(_ colorString: String) -> Color {
+        switch colorString.lowercased() {
+        case "green": return .green
+        case "blue": return .blue
+        case "purple": return .purple
+        case "orange": return .orange
+        case "red": return .red
+        case "pink": return .pink
+        case "yellow": return .yellow
+        case "mint": return .mint
+        case "indigo": return .indigo
+        case "teal": return .teal
+        default: return .gray
+        }
+    }
+    
+    private func inferCategoryColorFromHabitName(_ habitName: String) -> Color {
+        let lowercasedName = habitName.lowercased()
+        
+        // Fitness/Health related
+        if lowercasedName.contains("steps") || lowercasedName.contains("workout") || 
+           lowercasedName.contains("exercise") || lowercasedName.contains("run") ||
+           lowercasedName.contains("gym") || lowercasedName.contains("fitness") {
+            return .green
+        }
+        
+        // Learning/Education related
+        if lowercasedName.contains("read") || lowercasedName.contains("learn") ||
+           lowercasedName.contains("study") || lowercasedName.contains("language") ||
+           lowercasedName.contains("book") || lowercasedName.contains("course") {
+            return .orange
+        }
+        
+        // Health/Nutrition related
+        if lowercasedName.contains("water") || lowercasedName.contains("meal") ||
+           lowercasedName.contains("diet") || lowercasedName.contains("nutrition") ||
+           lowercasedName.contains("vitamin") || lowercasedName.contains("healthy") {
+            return .mint
+        }
+        
+        // Wellness/Mindfulness related
+        if lowercasedName.contains("meditation") || lowercasedName.contains("journal") ||
+           lowercasedName.contains("sleep") || lowercasedName.contains("mindfulness") ||
+           lowercasedName.contains("breathing") || lowercasedName.contains("yoga") {
+            return .purple
+        }
+        
+        // Productivity related
+        if lowercasedName.contains("work") || lowercasedName.contains("productivity") ||
+           lowercasedName.contains("focus") || lowercasedName.contains("task") ||
+           lowercasedName.contains("goal") || lowercasedName.contains("plan") {
+            return .blue
+        }
+        
+        // Social related
+        if lowercasedName.contains("social") || lowercasedName.contains("friend") ||
+           lowercasedName.contains("family") || lowercasedName.contains("call") ||
+           lowercasedName.contains("meet") || lowercasedName.contains("connect") {
+            return .pink
+        }
+        
+        // Default
+        return .gray
     }
 }
 
