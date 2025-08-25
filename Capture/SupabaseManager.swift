@@ -1620,18 +1620,8 @@ struct AnyEncodable: Encodable {
             NSLog("[SupabaseManager] getHabitCategories: successfully fetched %d habit categories", categories.count)
             return categories
         } catch {
-            NSLog("[SupabaseManager] getHabitCategories: error %@, falling back to hardcoded categories", error.localizedDescription)
-            
-            // Fallback to hardcoded categories if the function doesn't exist yet
-            return [
-                DatabaseHabitCategory(id: UUID(), name: "Fitness", description: "Physical exercise and movement habits", color: "green", icon: "dumbbell", sortOrder: 1),
-                DatabaseHabitCategory(id: UUID(), name: "Wellness", description: "Mental health and mindfulness habits", color: "purple", icon: "heart", sortOrder: 2),
-                DatabaseHabitCategory(id: UUID(), name: "Learning", description: "Educational and skill-building habits", color: "orange", icon: "book", sortOrder: 3),
-                DatabaseHabitCategory(id: UUID(), name: "Nutrition", description: "Diet and eating habits", color: "mint", icon: "apple", sortOrder: 4),
-                DatabaseHabitCategory(id: UUID(), name: "Productivity", description: "Work and efficiency habits", color: "blue", icon: "briefcase", sortOrder: 5),
-                DatabaseHabitCategory(id: UUID(), name: "Health", description: "General health and medical habits", color: "pink", icon: "cross", sortOrder: 6),
-                DatabaseHabitCategory(id: UUID(), name: "Social", description: "Relationship and communication habits", color: "yellow", icon: "users", sortOrder: 7)
-            ]
+            NSLog("[SupabaseManager] getHabitCategories: error %@ - categories not available", error.localizedDescription)
+            throw error
         }
     }
     

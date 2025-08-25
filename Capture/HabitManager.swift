@@ -765,7 +765,10 @@ class HabitManager: ObservableObject {
             
             NSLog("[HabitManager] loadHabitCategories: updated categories array with %d items", self.categories.count)
         } catch {
-            NSLog("[HabitManager] loadHabitCategories: error %@", error.localizedDescription)
+            NSLog("[HabitManager] loadHabitCategories: error %@ - habit categories not available", error.localizedDescription)
+            // Don't update the arrays - keep them empty to indicate categories are not available
+            self.habitCategories = []
+            self.categories = []
         }
     }
     

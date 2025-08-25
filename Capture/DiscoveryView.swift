@@ -870,19 +870,21 @@ struct HabitPhotoGrid: View {
     let habitName: String
     
     var body: some View {
-        Group {
-                if let string = item as? String {
-                    return string
-                } else {
-                    NSLog("[HabitPhotoGrid] Warning: non-string item in captures array: %@", String(describing: item))
-                    return nil
-                }
+        let safeCaptures = captures.compactMap { item in
+            if let string = item as? String {
+                return string
+            } else {
+                NSLog("[HabitPhotoGrid] Warning: non-string item in captures array: %@", String(describing: item))
+                return nil
             }
-            
-            let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : (validCaptures.isEmpty ? [] : Array(validCaptures.prefix(1)))
-            
-            let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, safeCaptures.count, validCaptures.count, photosToShow.count)
-            
+        }
+        
+        let validCaptures = safeCaptures.filter { !$0.isEmpty }
+        let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : (validCaptures.isEmpty ? [] : Array(validCaptures.prefix(1)))
+        
+        let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, safeCaptures.count, validCaptures.count, photosToShow.count)
+        
+        Group {
             if photosToShow.isEmpty {
                 // Placeholder
                 RoundedRectangle(cornerRadius: 8)
