@@ -880,74 +880,37 @@ class HabitManager: ObservableObject {
     }
     
     private func loadPopularHabitsInternal() async {
+        NSLog("[HabitManager] loadPopularHabitsInternal: starting")
+        
         do {
-            // For now, we'll create mock data since we don't have the API endpoint yet
-            // In a real implementation, this would call the API
-            let mockPopularHabits = [
+            // Load real community stats
+            let realCommunityStats = try await supabaseClient.getCommunityStats()
+            NSLog("[HabitManager] loadPopularHabitsInternal: loaded real community stats - activeUsers: %d, totalHabits: %d, totalCaptures: %d", realCommunityStats.activeUsers, realCommunityStats.totalHabits, realCommunityStats.totalCaptures)
+            
+            // Load real popular habits from trending habits
+            let trendingHabits = try await supabaseClient.getTrendingHabits()
+            let popularHabits = trendingHabits.prefix(5).map { trendingHabit in
                 PopularHabit(
-                    name: "Morning Workout",
-                    category: "Fitness",
-                    participants: 1250,
-                    totalStreak: 8750,
-                    description: "Start your day with energy and build strength",
+                    name: trendingHabit.name,
+                    category: trendingHabit.category,
+                    participants: trendingHabit.participants,
+                    totalStreak: trendingHabit.totalCaptures, // Using total captures as a proxy for total streak
+                    description: trendingHabit.description ?? "",
                     image: nil,
-                    captures: []
-                ),
-                PopularHabit(
-                    name: "Daily Meditation",
-                    category: "Wellness",
-                    participants: 890,
-                    totalStreak: 6230,
-                    description: "Find inner peace and reduce stress",
-                    image: nil,
-                    captures: []
-                ),
-                PopularHabit(
-                    name: "Read 30 Minutes",
-                    category: "Learning",
-                    participants: 2100,
-                    totalStreak: 14700,
-                    description: "Expand your knowledge and vocabulary",
-                    image: nil,
-                    captures: []
-                ),
-                PopularHabit(
-                    name: "Drink 8 Glasses of Water",
-                    category: "Health",
-                    participants: 3400,
-                    totalStreak: 23800,
-                    description: "Stay hydrated and maintain good health",
-                    image: nil,
-                    captures: []
-                ),
-                PopularHabit(
-                    name: "No Phone Before Bed",
-                    category: "Wellness",
-                    participants: 1560,
-                    totalStreak: 10920,
-                    description: "Improve sleep quality and reduce blue light exposure",
-                    image: nil,
-                    captures: []
+                    captures: trendingHabit.captures ?? []
                 )
-            ]
+            }
             
-            let mockCommunityStats = CommunityStats(
-                activeUsers: 15420,
-                totalHabits: 8920,
-                totalCaptures: 45670
-            )
+            self.popularHabits = Array(popularHabits)
+            self.communityStats = realCommunityStats
             
-            self.popularHabits = mockPopularHabits
-            self.communityStats = mockCommunityStats
-            
-            // Don't override categories - keep the database colors from loadHabitCategories()
-            // The categories are already loaded with correct colors from the database
+            NSLog("[HabitManager] loadPopularHabitsInternal: completed successfully with %d real popular habits", popularHabits.count)
             
         } catch {
+            NSLog("[HabitManager] loadPopularHabitsInternal: error %@", error.localizedDescription)
             self.errorMessage = error.localizedDescription
             self.popularHabits = []
             self.communityStats = CommunityStats()
-            // Don't clear categories on error - preserve database colors
         }
     }
     

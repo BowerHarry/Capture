@@ -1641,4 +1641,26 @@ struct AnyEncodable: Encodable {
             throw error
         }
     }
+    
+    func getCommunityStats() async throws -> CommunityStats {
+        NSLog("[SupabaseManager] getCommunityStats: fetching community stats from database")
+        
+        do {
+            let stats: [CommunityStats] = try await client.database
+                .rpc("get_community_stats")
+                .execute()
+                .value
+            
+            if let firstStat = stats.first {
+                NSLog("[SupabaseManager] getCommunityStats: successfully fetched stats - activeUsers: %d, totalHabits: %d, totalCaptures: %d", firstStat.activeUsers, firstStat.totalHabits, firstStat.totalCaptures)
+                return firstStat
+            } else {
+                NSLog("[SupabaseManager] getCommunityStats: no stats returned, using default values")
+                return CommunityStats(activeUsers: 0, totalHabits: 0, totalCaptures: 0)
+            }
+        } catch {
+            NSLog("[SupabaseManager] getCommunityStats: error %@ - using default values", error.localizedDescription)
+            return CommunityStats(activeUsers: 0, totalHabits: 0, totalCaptures: 0)
+        }
+    }
 }

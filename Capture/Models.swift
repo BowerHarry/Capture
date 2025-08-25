@@ -607,6 +607,12 @@ struct CommunityStats: Codable {
     let totalHabits: Int
     let totalCaptures: Int
     
+    enum CodingKeys: String, CodingKey {
+        case activeUsers = "active_users"
+        case totalHabits = "total_habits"
+        case totalCaptures = "total_captures"
+    }
+    
     init(activeUsers: Int = 0, totalHabits: Int = 0, totalCaptures: Int = 0) {
         self.activeUsers = activeUsers
         self.totalHabits = totalHabits
