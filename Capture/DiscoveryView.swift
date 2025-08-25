@@ -269,7 +269,7 @@ struct TrendingTabContent: View {
             }
         }
         .onAppear {
-            // Preload images for trending habits
+            // Preload images for trending habits immediately
             preloadTrendingImages()
         }
         .task {
@@ -282,7 +282,12 @@ struct TrendingTabContent: View {
         // Preload trending thumbnails with caching
         let allCaptures = habitManager.trendingCaptures.compactMap { $0.imageUrl }
         if !allCaptures.isEmpty {
-            imagePreloader.preloadTrendingThumbnails(for: allCaptures, size: CGSize(width: 64, height: 64))
+            // Preload all trending thumbnails in the background
+            Task {
+                for url in allCaptures {
+                    _ = await imagePreloader.getTrendingThumbnail(for: url, size: CGSize(width: 64, height: 64))
+                }
+            }
         }
     }
     
@@ -851,15 +856,24 @@ struct TrendingThumbnailAsyncImage<Content: View, Placeholder: View>: View {
         .onAppear {
             loadThumbnail()
         }
+        .onChange(of: imageUrl) { _ in
+            loadThumbnail()
+        }
     }
     
     private func loadThumbnail() {
-        Task {
-            if let thumbnail = await imagePreloader.getTrendingThumbnail(for: imageUrl, size: size) {
-                await MainActor.run {
-                    self.image = thumbnail
-                    self.isLoading = false
-                }
+        // First check if image is already cached synchronously
+        if let cachedImage = imagePreloader.getCachedTrendingThumbnailOnly(for: imageUrl) {
+            self.image = cachedImage
+            self.isLoading = false
+            return
+        }
+        
+        // If not cached, use the completion callback system
+        imagePreloader.getTrendingThumbnail(for: imageUrl, size: size) { loadedImage in
+            DispatchQueue.main.async {
+                self.image = loadedImage
+                self.isLoading = false
             }
         }
     }
@@ -1070,6 +1084,7 @@ struct CategoryFlowLayout<Content: View>: View {
         return CGFloat(rows.count) * rowHeight
     }
 }
+
 
 
 

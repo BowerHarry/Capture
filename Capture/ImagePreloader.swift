@@ -6,15 +6,19 @@ import Foundation
 class ImagePreloader: ObservableObject {
     static let shared = ImagePreloader()
     
-    private var imageCache: [String: UIImage] = [:]
-    private var loadingTasks: [String: Task<Void, Never>] = [:]
-    internal let cache = NSCache<NSString, UIImage>()
-    private let queue = DispatchQueue(label: "com.capture.imagepreloader", attributes: .concurrent)
-    private let lockQueue = DispatchQueue(label: "com.capture.imagepreloader.lock")
+    // MARK: - Properties
     
-    // Trending thumbnail specific cache
+    internal let cache = NSCache<NSString, UIImage>()
+    private var imageCache: [String: UIImage] = [:]
+    private var avatarCache: [String: UIImage] = [:]
+    private var loadingTasks: [String: Task<Void, Never>] = [:]
+    private let lockQueue = DispatchQueue(label: "imagePreloader.lock", attributes: .concurrent)
+    
+    // MARK: - Trending Thumbnail Properties
+    
     private var trendingThumbnailCache: [String: UIImage] = [:]
     private var trendingThumbnailLoadingTasks: [String: Task<Void, Never>] = [:]
+    private var trendingThumbnailCompletions: [String: [(UIImage?) -> Void]] = [:]
     
     init() {
         // Configure cache
@@ -212,6 +216,65 @@ extension ImagePreloader {
         }
     }
     
+    // Get trending thumbnail with completion callback
+    func getTrendingThumbnail(for url: String, size: CGSize, completion: @escaping (UIImage?) -> Void) {
+        guard !url.isEmpty else { 
+            completion(nil)
+            return 
+        }
+        
+        // Normalize URL
+        let normalizedURL = normalizeTrendingURL(url)
+        
+        // Check cache first
+        if let cached = getCachedTrendingThumbnail(for: normalizedURL) {
+            NSLog("[ImagePreloader] getTrendingThumbnail: found cached thumbnail for %@", normalizedURL)
+            completion(cached)
+            return
+        }
+        
+        // Check if already loading
+        lockQueue.sync {
+            if trendingThumbnailLoadingTasks[normalizedURL] != nil {
+                NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
+                // Store completion callback to be called when loading finishes
+                if trendingThumbnailCompletions[normalizedURL] == nil {
+                    trendingThumbnailCompletions[normalizedURL] = []
+                }
+                trendingThumbnailCompletions[normalizedURL]?.append(completion)
+                return
+            }
+            
+            NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
+            
+            // Store completion callback
+            if trendingThumbnailCompletions[normalizedURL] == nil {
+                trendingThumbnailCompletions[normalizedURL] = []
+            }
+            trendingThumbnailCompletions[normalizedURL]?.append(completion)
+            
+            // Start loading
+            let task = Task {
+                await loadTrendingThumbnail(url: normalizedURL, size: size)
+            }
+            trendingThumbnailLoadingTasks[normalizedURL] = task
+        }
+    }
+    
+    // Check if trending thumbnail is cached (synchronous)
+    func isTrendingThumbnailCached(for url: String) -> Bool {
+        guard !url.isEmpty else { return false }
+        let normalizedURL = normalizeTrendingURL(url)
+        return getCachedTrendingThumbnail(for: normalizedURL) != nil
+    }
+    
+    // Get cached trending thumbnail only (synchronous)
+    func getCachedTrendingThumbnailOnly(for url: String) -> UIImage? {
+        guard !url.isEmpty else { return nil }
+        let normalizedURL = normalizeTrendingURL(url)
+        return getCachedTrendingThumbnail(for: normalizedURL)
+    }
+    
     private func getCachedTrendingThumbnail(for url: String) -> UIImage? {
         return lockQueue.sync {
             return trendingThumbnailCache[url]
@@ -263,6 +326,12 @@ extension ImagePreloader {
                 trendingThumbnailLoadingTasks.removeValue(forKey: url)
             }
             
+            // Call all completion callbacks
+            lockQueue.sync {
+                trendingThumbnailCompletions[url]?.forEach { $0(thumbnail) }
+                trendingThumbnailCompletions[url] = [] // Clear completions after calling
+            }
+            
             NSLog("[ImagePreloader] loadTrendingThumbnail: successfully cached thumbnail for %@", url)
             
         } catch {
@@ -271,6 +340,12 @@ extension ImagePreloader {
             // Clean up loading task
             lockQueue.sync {
                 trendingThumbnailLoadingTasks.removeValue(forKey: url)
+            }
+            
+            // Call all completion callbacks with nil
+            lockQueue.sync {
+                trendingThumbnailCompletions[url]?.forEach { $0(nil) }
+                trendingThumbnailCompletions[url] = [] // Clear completions after calling
             }
         }
     }
@@ -314,6 +389,7 @@ extension ImagePreloader {
         lockQueue.sync {
             trendingThumbnailCache.removeAll()
             trendingThumbnailLoadingTasks.removeAll()
+            trendingThumbnailCompletions.removeAll()
         }
     }
 }
