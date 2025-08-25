@@ -703,7 +703,10 @@ struct DiscoveryHabitCard: View {
         HStack(alignment: .top, spacing: 12) {
             // Left side: Thumbnails (smaller)
             let trendingCaptures = habitManager.getTrendingCaptures(for: habit.id)
-            let captureUrls = trendingCaptures.compactMap { $0.imageUrl }
+            let captureUrls = trendingCaptures.compactMap { capture -> String? in
+                guard let imageUrl = capture.imageUrl, !imageUrl.isEmpty else { return nil }
+                return imageUrl
+            }
             
             let _ = NSLog("[DiscoveryHabitCard] habit: %@, trendingCaptures count: %d, captureUrls count: %d", habit.name, trendingCaptures.count, captureUrls.count)
             
@@ -868,7 +871,6 @@ struct HabitPhotoGrid: View {
     
     var body: some View {
         Group {
-            let validCaptures = captures.compactMap { item -> String? in
                 if let string = item as? String {
                     return string
                 } else {
@@ -877,9 +879,9 @@ struct HabitPhotoGrid: View {
                 }
             }
             
-            let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : validCaptures
+            let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : (validCaptures.isEmpty ? [] : Array(validCaptures.prefix(1)))
             
-            let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, captures.count, validCaptures.count, photosToShow.count)
+            let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, safeCaptures.count, validCaptures.count, photosToShow.count)
             
             if photosToShow.isEmpty {
                 // Placeholder
