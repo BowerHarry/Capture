@@ -878,17 +878,6 @@ class HabitManager: ObservableObject {
     
     private func loadPopularHabitsInternal() async {
         do {
-            // Initialize categories
-            let initialCategories = [
-                DiscoveryHabitCategory(id: UUID(), name: "Fitness", color: "blue"),
-                DiscoveryHabitCategory(id: UUID(), name: "Wellness", color: "green"),
-                DiscoveryHabitCategory(id: UUID(), name: "Learning", color: "purple"),
-                DiscoveryHabitCategory(id: UUID(), name: "Nutrition", color: "orange"),
-                DiscoveryHabitCategory(id: UUID(), name: "Productivity", color: "red"),
-                DiscoveryHabitCategory(id: UUID(), name: "Health", color: "pink"),
-                DiscoveryHabitCategory(id: UUID(), name: "Social", color: "yellow")
-            ]
-            
             // For now, we'll create mock data since we don't have the API endpoint yet
             // In a real implementation, this would call the API
             let mockPopularHabits = [
@@ -948,20 +937,14 @@ class HabitManager: ObservableObject {
             self.popularHabits = mockPopularHabits
             self.communityStats = mockCommunityStats
             
-            // Update categories with counts
-            let updatedCategories = initialCategories.map { category in
-                let count = mockPopularHabits
-                    .filter { $0.category == category.name }
-                    .reduce(0) { $0 + $1.participants }
-                return DiscoveryHabitCategory(id: category.id, name: category.name, color: category.color)
-            }
-            self.categories = updatedCategories
+            // Don't override categories - keep the database colors from loadHabitCategories()
+            // The categories are already loaded with correct colors from the database
             
         } catch {
             self.errorMessage = error.localizedDescription
             self.popularHabits = []
             self.communityStats = CommunityStats()
-            self.categories = []
+            // Don't clear categories on error - preserve database colors
         }
     }
     
