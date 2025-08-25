@@ -14,6 +14,10 @@ class HabitManager: ObservableObject {
     private var hasComputedProgress = false
     private var lastComputedDataHash = ""
     
+    // Static cache for progress grid data
+    private static var progressGridCache: (habits: [Habit], captures: [HabitCapture], timestamp: Date)?
+    private static let cacheValidityDuration: TimeInterval = 300 // 5 minutes
+    
     // Discovery properties
     @Published var popularHabits: [PopularHabit] = []
     @Published var trendingHabits: [TrendingHabit] = []
@@ -443,6 +447,73 @@ class HabitManager: ObservableObject {
         } catch {
             NSLog("[HabitManager] loadHabits: error %@", error.localizedDescription)
             self.errorMessage = error.localizedDescription
+        }
+    }
+    
+    // MARK: - Optimized Progress Grid Loading
+    func loadProgressGridData() async {
+        NSLog("[HabitManager] loadProgressGridData: starting optimized fetch for progress grid")
+        
+        // Check static cache first
+        if let cache = Self.progressGridCache,
+           Date().timeIntervalSince(cache.timestamp) < Self.cacheValidityDuration {
+            NSLog("[HabitManager] loadProgressGridData: using static cache")
+            self.habits = cache.habits
+            self.captures = cache.captures
+            computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            return
+        }
+        
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        
+        do {
+            let (fetchedHabits, fetchedCaptures) = try await supabaseClient.getProgressGridData(since: sixMonthsAgo)
+            NSLog("[HabitManager] loadProgressGridData: successfully fetched %d habits and %d captures", fetchedHabits.count, fetchedCaptures.count)
+            
+            // Update the published properties
+            self.habits = fetchedHabits
+            self.captures = fetchedCaptures
+            
+            // Update static cache
+            Self.progressGridCache = (habits: fetchedHabits, captures: fetchedCaptures, timestamp: Date())
+            
+            // Compute streaks and completion
+            NSLog("[HabitManager] loadProgressGridData: computing streaks and completion")
+            computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            
+            NSLog("[HabitManager] loadProgressGridData: completed successfully")
+        } catch {
+            NSLog("[HabitManager] loadProgressGridData: error %@", error.localizedDescription)
+            self.errorMessage = error.localizedDescription
+        }
+    }
+    
+    // MARK: - Ultra-Optimized Progress Grid Loading (using database function)
+    func loadProgressGridDataOptimized() async {
+        NSLog("[HabitManager] loadProgressGridDataOptimized: starting ultra-optimized fetch using database function")
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        
+        do {
+            let (fetchedHabits, fetchedCaptures) = try await supabaseClient.getProgressGridDataOptimized(since: sixMonthsAgo)
+            NSLog("[HabitManager] loadProgressGridDataOptimized: successfully fetched %d habits and %d captures", fetchedHabits.count, fetchedCaptures.count)
+            
+            // Update the published properties
+            self.habits = fetchedHabits
+            self.captures = fetchedCaptures
+            
+            // Compute streaks and completion
+            NSLog("[HabitManager] loadProgressGridDataOptimized: computing streaks and completion")
+            computeStreaksAndCompletion(habits: self.habits, captures: self.captures)
+            
+            NSLog("[HabitManager] loadProgressGridDataOptimized: completed successfully")
+        } catch {
+            NSLog("[HabitManager] loadProgressGridDataOptimized: error %@, falling back to regular method", error.localizedDescription)
+            // Fallback to regular method if database function fails
+            await loadProgressGridData()
         }
     }
     

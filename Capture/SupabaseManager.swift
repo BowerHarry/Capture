@@ -595,6 +595,208 @@ class SupabaseManager {
         }
     }
     
+    // MARK: - Optimized Progress Grid Query
+    func getProgressGridData(since: Date) async throws -> (habits: [Habit], captures: [HabitCapture]) {
+        NSLog("[SupabaseManager] getProgressGridData: starting optimized fetch for progress grid data since %@", since.description)
+        
+        let session = try await client.auth.session
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let sinceStr = iso.string(from: since)
+        
+        NSLog("[SupabaseManager] getProgressGridData: querying data for user %@ since %@", session.user.id.uuidString, sinceStr)
+        
+        do {
+            // Fetch habits and captures sequentially for now (parallel execution has issues with Supabase client)
+            let userHabits: [UserHabit] = try await client.database
+                .from("user_habits")
+                .select()
+                .eq("user_id", value: session.user.id)
+                .eq("is_active", value: true)
+                .order("created_at", ascending: true)
+                .execute()
+                .value
+            
+            let captures: [HabitCapture] = try await client.database
+                .from("captures")
+                .select()
+                .eq("user_id", value: session.user.id)
+                .gte("created_at", value: sinceStr)
+                .not("user_habit_id", operator: .is, value: "null")
+                .order("created_at", ascending: true)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getProgressGridData: successfully fetched %d user habits and %d captures", userHabits.count, captures.count)
+            
+            // Convert user habits to Habit objects with batch template fetching
+            var habits: [Habit] = []
+            
+            // Get all unique template IDs
+            let templateIds = Set(userHabits.map { $0.habitTemplateId })
+            NSLog("[SupabaseManager] getProgressGridData: fetching %d unique templates", templateIds.count)
+            
+            // Batch fetch all templates
+            let allTemplates: [HabitTemplate] = try await client.database
+                .from("habit_templates")
+                .select()
+                .in("id", values: Array(templateIds))
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getProgressGridData: successfully fetched %d templates", allTemplates.count)
+            
+            // Create a dictionary for quick template lookup
+            let templateDict = Dictionary(uniqueKeysWithValues: allTemplates.map { ($0.id, $0) })
+            
+            for userHabit in userHabits {
+                guard let template = templateDict[userHabit.habitTemplateId] else {
+                    NSLog("[SupabaseManager] getProgressGridData: template not found for habit %@", userHabit.id.uuidString)
+                    continue
+                }
+                
+                let habit = Habit(
+                    id: userHabit.id,
+                    name: template.name,
+                    icon: nil, // HabitTemplate doesn't have icon
+                    color: nil, // HabitTemplate doesn't have color
+                    category: template.category,
+                    target: template.targetCount ?? 1,
+                    targetFrequency: template.targetFrequency,
+                    targetCount: template.targetCount,
+                    currentStreak: userHabit.currentStreak,
+                    longestStreak: 0,
+                    isActive: userHabit.isActive,
+                    createdAt: userHabit.createdAt,
+                    updatedAt: userHabit.updatedAt,
+                    userId: userHabit.userId
+                )
+                
+                habits.append(habit)
+            }
+            
+            NSLog("[SupabaseManager] getProgressGridData: successfully processed %d habits and %d captures", habits.count, captures.count)
+            return (habits: habits, captures: captures)
+            
+        } catch {
+            NSLog("[SupabaseManager] getProgressGridData: error %@", error.localizedDescription)
+            
+            // Add detailed error logging
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    NSLog("[SupabaseManager] getProgressGridData: missing key '%@' at path %@", key.stringValue, context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .typeMismatch(let type, let context):
+                    NSLog("[SupabaseManager] getProgressGridData: type mismatch for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .valueNotFound(let type, let context):
+                    NSLog("[SupabaseManager] getProgressGridData: value not found for %@ at path %@", String(describing: type), context.codingPath.map { $0.stringValue }.joined(separator: "."))
+                case .dataCorrupted(let context):
+                    NSLog("[SupabaseManager] getProgressGridData: data corrupted at path %@: %@", context.codingPath.map { $0.stringValue }.joined(separator: "."), context.debugDescription)
+                @unknown default:
+                    NSLog("[SupabaseManager] getProgressGridData: unknown decoding error")
+                }
+            }
+            
+            throw error
+        }
+    }
+    
+    // MARK: - Optimized Database Function Query
+    func getProgressGridDataOptimized(since: Date) async throws -> (habits: [Habit], captures: [HabitCapture]) {
+        NSLog("[SupabaseManager] getProgressGridDataOptimized: starting optimized database function query since %@", since.description)
+        
+        let session = try await client.auth.session
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let sinceStr = iso.string(from: since)
+        
+        NSLog("[SupabaseManager] getProgressGridDataOptimized: querying optimized function for user %@ since %@", session.user.id.uuidString, sinceStr)
+        
+        do {
+            // Use the optimized database function
+            let response = try await client.database
+                .rpc("get_user_progress_grid_data", params: [
+                    "p_user_id": session.user.id.uuidString,
+                    "p_since_date": sinceStr
+                ])
+                .execute()
+            
+            guard let rows = response.value as? [[String: Any]] else {
+                NSLog("[SupabaseManager] getProgressGridDataOptimized: failed to cast response to expected type")
+                throw NSError(domain: "DatabaseError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from database function"])
+            }
+            
+            NSLog("[SupabaseManager] getProgressGridDataOptimized: successfully fetched %d rows from database function", rows.count)
+            
+            // Process the results to separate habits and captures
+            var habitsDict: [UUID: Habit] = [:]
+            var captures: [HabitCapture] = []
+            
+            for row in rows {
+                // Extract habit data
+                if let userHabitIdString = row["user_habit_id"] as? String,
+                   let userHabitId = UUID(uuidString: userHabitIdString),
+                   habitsDict[userHabitId] == nil {
+                    
+                    let habit = Habit(
+                        id: userHabitId,
+                        name: row["habit_name"] as? String ?? "",
+                        icon: nil, // HabitTemplate doesn't have icon
+                        color: nil, // HabitTemplate doesn't have color
+                        category: row["habit_category"] as? String ?? "",
+                        target: row["target_count"] as? Int ?? 1,
+                        targetFrequency: row["target_frequency"] as? String ?? "daily",
+                        targetCount: row["target_count"] as? Int,
+                        currentStreak: row["current_streak"] as? Int ?? 0,
+                        longestStreak: 0, // Will be computed later
+                        isActive: row["is_active"] as? Bool ?? true,
+                        createdAt: parseDate(row["user_habit_created_at"]),
+                        updatedAt: parseDate(row["user_habit_updated_at"]),
+                        userId: UUID(uuidString: row["user_id"] as? String ?? "") ?? UUID()
+                    )
+                    habitsDict[userHabitId] = habit
+                }
+                
+                // Extract capture data
+                if let captureIdString = row["capture_id"] as? String,
+                   let captureId = UUID(uuidString: captureIdString) {
+                    
+                    let capture = HabitCapture(
+                        id: captureId,
+                        habitId: nil, // Not used in this context
+                        habitTemplateId: nil, // Not used in this context
+                        userHabitId: UUID(uuidString: row["user_habit_id"] as? String ?? ""),
+                        userId: UUID(uuidString: row["user_id"] as? String ?? "") ?? UUID(),
+                        imageUrl: row["image_url"] as? String,
+                        caption: row["caption"] as? String,
+                        isPublic: row["is_public"] as? Bool ?? false,
+                        createdAt: parseDate(row["capture_created_at"]),
+                        updatedAt: parseDate(row["capture_updated_at"])
+                    )
+                    captures.append(capture)
+                }
+            }
+            
+            let habits = Array(habitsDict.values)
+            NSLog("[SupabaseManager] getProgressGridDataOptimized: successfully processed %d habits and %d captures", habits.count, captures.count)
+            return (habits: habits, captures: captures)
+            
+        } catch {
+            NSLog("[SupabaseManager] getProgressGridDataOptimized: error %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    // Helper function to parse dates from database
+    private func parseDate(_ value: Any?) -> Date {
+        if let dateString = value as? String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.date(from: dateString) ?? Date()
+        }
+        return Date()
+    }
+    
     // MARK: - Social Features
     func getSocialFeed(userId: String) async throws -> [HabitCapture] {
         let response = try await makeAPICall(

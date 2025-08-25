@@ -180,50 +180,7 @@ struct HabitDashboardView: View {
                                     .padding(.horizontal)
                             }
                         }
-                        .gesture(
-                            DragGesture()
-                                .onEnded { value in
-                                    let verticalThreshold: CGFloat = 50
-                                    let horizontalThreshold: CGFloat = 50
-                                    
-                                    // Check if the gesture is primarily vertical
-                                    if abs(value.translation.height) > abs(value.translation.width) {
-                                        // Vertical swipe - handle collapse/expand
-                                        if value.translation.height < -verticalThreshold {
-                                            // Swipe up - collapse habits
-                                            if !habitsCollapsed {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
-                                                    habitsCollapsed = true
-                                                }
-                                            }
-                                        } else if value.translation.height > verticalThreshold {
-                                            // Swipe down - expand habits
-                                            if habitsCollapsed {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
-                                                    habitsCollapsed = false
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        // Horizontal swipe - handle tab switching
-                                        if value.translation.width > horizontalThreshold {
-                                            // Swipe right - go to previous tab
-                                            if selectedTab == "grid" {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
-                                                    selectedTab = "overview"
-                                                }
-                                            }
-                                        } else if value.translation.width < -horizontalThreshold {
-                                            // Swipe left - go to next tab
-                                            if selectedTab == "overview" {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
-                                                    selectedTab = "grid"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                        )
+
                     }
                 }
                 .padding(.vertical)
@@ -292,6 +249,16 @@ struct HabitDashboardView: View {
                 animatedTotalStreak = totalStreak
                 animatedLongestStreak = longestStreak
                 animatedTodayPercent = todayPercent
+            }
+            .onChange(of: selectedTab) { newTab in
+                // Use ultra-optimized loading for progress grid tab
+                if newTab == "grid" {
+                    Task {
+                        await habitManager.loadProgressGridDataOptimized()
+                        // Preload habit capture images after ultra-optimized data load
+                        imagePreloader.preloadHabitCaptures(habitManager.captures)
+                    }
+                }
             }
         }
     }
@@ -472,27 +439,7 @@ private struct GreetingCard: View {
                 .stroke(CaptureTheme.Palette.border.opacity(0.3), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 2)
-        .gesture(
-            DragGesture()
-                .onEnded { value in
-                    let threshold: CGFloat = 30
-                    if value.translation.height < -threshold {
-                        // Swipe up - collapse
-                        if !isCollapsed {
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                onToggleCollapse()
-                            }
-                        }
-                    } else if value.translation.height > threshold {
-                        // Swipe down - expand
-                        if isCollapsed {
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                onToggleCollapse()
-                            }
-                        }
-                    }
-                }
-        )
+
     }
     
     private var timeGreeting: String {
@@ -905,99 +852,137 @@ private struct ExpandedHabitsList: View {
 
 private struct ProgressGridList: View {
     @EnvironmentObject var habitManager: HabitManager
-    @State private var gridHeights: [UUID: CGFloat] = [:]
+    @State private var cachedHabitData: [OptimizedHabitData] = []
+    @State private var lastUpdateTime: Date = Date()
+    @State private var isComputing: Bool = false
     let weeks: Int = 26 // ~6 months
     let spacing: CGFloat = 3
     
-    private var sortedHabits: [Habit] {
-        habitManager.habits.sorted { habit1, habit2 in
+    // Pre-computed data for performance with caching
+    private var optimizedHabitData: [OptimizedHabitData] {
+        // Check if we need to update cache (every 5 minutes or when data changes)
+        let shouldUpdate = Date().timeIntervalSince(lastUpdateTime) > 300 || cachedHabitData.isEmpty
+        
+        if !shouldUpdate {
+            NSLog("[ProgressGridList] Using cached data for %d habits", cachedHabitData.count)
+            return cachedHabitData
+        }
+        
+        // Prevent multiple simultaneous computations
+        if isComputing {
+            NSLog("[ProgressGridList] Already computing, returning cached data")
+            return cachedHabitData
+        }
+        
+        NSLog("[ProgressGridList] Cache expired, recomputing data for %d habits", habitManager.habits.count)
+        isComputing = true
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
+        let calendar = Calendar.current
+        let sixMonthsAgo = calendar.date(byAdding: .day, value: -180, to: Date()) ?? Date()
+        let today = Date()
+        
+        NSLog("[ProgressGridList] Computing sorted habits...")
+        let sortedHabits = habitManager.habits.sorted { habit1, habit2 in
             let habit1Completed = habitManager.progress(for: habit1.id)?.isComplete == true
             let habit2Completed = habitManager.progress(for: habit2.id)?.isComplete == true
             
-            // Show incomplete habits first, then completed ones
             if habit1Completed != habit2Completed {
                 return !habit1Completed
             }
-            
-            // If both have same completion status, sort by name
             return habit1.name < habit2.name
         }
+        
+        NSLog("[ProgressGridList] Processing %d habits...", sortedHabits.count)
+        let result = sortedHabits.map { habit in
+            NSLog("[ProgressGridList] Processing habit: %@", habit.name)
+            let habitStartTime = CFAbsoluteTimeGetCurrent()
+            
+            let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
+            NSLog("[ProgressGridList] Got streak value: %d for %@", streakValue, habit.name)
+            
+            let captureCount = habitManager.captures.filter { $0.userHabitId == habit.id }.count
+            NSLog("[ProgressGridList] Got capture count: %d for %@", captureCount, habit.name)
+            
+            let habitColor = getHabitColor(habit)
+            NSLog("[ProgressGridList] Got color for %@", habit.name)
+            
+            // Pre-compute capture dates for this habit
+            let captureDates = Set(habitManager.captures
+                .filter { $0.userHabitId == habit.id }
+                .map { calendar.startOfDay(for: $0.createdAt) })
+            NSLog("[ProgressGridList] Computed %d capture dates for %@", captureDates.count, habit.name)
+            
+            let habitEndTime = CFAbsoluteTimeGetCurrent()
+            NSLog("[ProgressGridList] Habit %@ processed in %.3f seconds", habit.name, habitEndTime - habitStartTime)
+            
+            return OptimizedHabitData(
+                habit: habit,
+                streakValue: streakValue,
+                captureCount: captureCount,
+                habitColor: habitColor,
+                captureDates: captureDates,
+                sixMonthsAgo: sixMonthsAgo,
+                today: today
+            )
+        }
+        
+        let endTime = CFAbsoluteTimeGetCurrent()
+        NSLog("[ProgressGridList] Total data computation took %.3f seconds for %d habits", endTime - startTime, result.count)
+        
+        // Update cache
+        DispatchQueue.main.async {
+            self.cachedHabitData = result
+            self.lastUpdateTime = Date()
+            self.isComputing = false
+        }
+        
+        return result
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            ForEach(sortedHabits) { habit in
-                VStack(alignment: .leading, spacing: 6) {
-                    // Header with habit name and streak
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(habit.name).font(.subheadline).fontWeight(.semibold)
-                        
-                        // Streak display with icon
-                        let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
-                        HStack(spacing: 4) {
-                            Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 10))
-                            Text("\(streakValue) day streak").font(.system(size: 12)).foregroundColor(.secondary)
-                        }
+        NSLog("[ProgressGridList] Rendering body with %d habits", optimizedHabitData.count)
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
+        let result = VStack(spacing: 16) {
+            if optimizedHabitData.isEmpty {
+                ProgressView("Loading progress grid...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                LazyVStack(spacing: 16) {
+                    ForEach(optimizedHabitData) { data in
+                        OptimizedHabitGridCard(data: data, weeks: weeks, spacing: spacing)
+                            .onAppear {
+                                NSLog("[ProgressGridList] Habit card appeared: %@", data.habit.name)
+                            }
                     }
-                    
-                    // Grid with measured height
-                    ZStack(alignment: .topLeading) {
-                        GeometryReader { proxy in
-                            let totalWidth = proxy.size.width
-                            let cellSize = (totalWidth - CGFloat(weeks - 1) * spacing) / CGFloat(weeks)
-                            let gridHeight = cellSize * 7 + spacing * 6
-                            
-                            GridContentView(
-                                weeks: weeks,
-                                spacing: spacing,
-                                cellSize: cellSize,
-                                habit: habit
-                            )
-                            .frame(width: totalWidth, height: gridHeight, alignment: .topLeading)
-                            .onAppear { gridHeights[habit.id] = gridHeight }
-                        }
-                    }
-                    .frame(height: gridHeights[habit.id] ?? 0)
-                    
-                    // Footer total captures
-                    let captureCount = habitManager.captures.filter { $0.habitId == habit.id }.count
-                    Text("\(captureCount) captures in the last 6 months")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
                 }
-                .padding(12)
-                .background(Color(.systemBackground))
-                .cornerRadius(20)
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(CaptureTheme.Palette.border, lineWidth: 1))
             }
         }
+        .onAppear {
+            NSLog("[ProgressGridList] ProgressGridList appeared")
+        }
+        .onDisappear {
+            NSLog("[ProgressGridList] ProgressGridList disappeared")
+        }
+        
+        let endTime = CFAbsoluteTimeGetCurrent()
+        NSLog("[ProgressGridList] Body rendering took %.3f seconds", endTime - startTime)
+        
+        return result
     }
     
-    private func habitColor(_ habit: Habit) -> Color {
-        // Use habit's custom color if available, otherwise fall back to category color
+    // Cached color lookup
+    private func getHabitColor(_ habit: Habit) -> Color {
         if let colorString = habit.color {
             return Color(hex: colorString)
         }
-        return categoryColor(habit.category)
-    }
-    
-    private func habitIcon(_ habit: Habit) -> String {
-        // Use habit's custom icon if available, otherwise fall back to category symbol
-        if let iconString = habit.icon {
-            return iconString
-        }
-        return categorySymbol(habit.category)
-    }
-    
-    private func categoryColor(_ category: String) -> Color {
-        // Try to find the category in the database first
-        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+        
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == habit.category.lowercased() }) {
             return CaptureTheme.categoryColor(from: habitCategory.color)
         }
         
-        // Fallback to the existing mapping
-        switch category {
+        switch habit.category {
         case "Fitness": return CaptureTheme.Palette.fitness
         case "Wellness": return CaptureTheme.Palette.wellness
         case "Learning": return CaptureTheme.Palette.learning
@@ -1008,131 +993,145 @@ private struct ProgressGridList: View {
         default: return .gray
         }
     }
-    
-    private func categorySymbol(_ category: String) -> String {
-        switch category {
-        case "Fitness": return "figure.run"
-        case "Wellness": return "leaf.fill"
-        case "Learning": return "book.fill"
-        case "Nutrition": return "fork.knife"
-        case "Productivity": return "checkmark.square.fill"
-        case "Health": return "heart.fill"
-        case "Social": return "person.2.fill"
-        default: return "star.fill"
-        }
-    }
-    
-
 }
 
-private struct GridContentView: View {
+// Optimized data structure
+private struct OptimizedHabitData: Identifiable {
+    let habit: Habit
+    let streakValue: Int
+    let captureCount: Int
+    let habitColor: Color
+    let captureDates: Set<Date>
+    let sixMonthsAgo: Date
+    let today: Date
+    
+    var id: UUID { habit.id }
+}
+
+// Optimized grid card
+private struct OptimizedHabitGridCard: View {
+    let data: OptimizedHabitData
     let weeks: Int
     let spacing: CGFloat
-    let cellSize: CGFloat
-    let habit: Habit
     
     var body: some View {
-        HStack(alignment: .top, spacing: spacing) {
+        NSLog("[OptimizedHabitGridCard] Rendering card for: %@", data.habit.name)
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
+        let result = VStack(alignment: .leading, spacing: 6) {
+            // Header with habit name and streak
+            VStack(alignment: .leading, spacing: 4) {
+                Text(data.habit.name).font(.subheadline).fontWeight(.semibold)
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 10))
+                    Text("\(data.streakValue) day streak").font(.system(size: 12)).foregroundColor(.secondary)
+                }
+            }
+            
+            // Optimized grid without GeometryReader
+            OptimizedGridView(
+                data: data,
+                weeks: weeks,
+                spacing: spacing
+            )
+            
+            // Footer total captures
+            Text("\(data.captureCount) captures in the last 6 months")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading) // Fix width issue
+        .background(Color(.systemBackground))
+        .cornerRadius(20)
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(CaptureTheme.Palette.border, lineWidth: 1))
+        
+        let endTime = CFAbsoluteTimeGetCurrent()
+        NSLog("[OptimizedHabitGridCard] Card rendering took %.3f seconds for %@", endTime - startTime, data.habit.name)
+        
+        return result
+    }
+}
+
+// Optimized grid view without GeometryReader
+private struct OptimizedGridView: View {
+    let data: OptimizedHabitData
+    let weeks: Int
+    let spacing: CGFloat
+    
+    var body: some View {
+        NSLog("[OptimizedGridView] Rendering grid for: %@", data.habit.name)
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
+        let result = HStack(alignment: .top, spacing: spacing) {
             ForEach(0..<weeks, id: \.self) { week in
                 VStack(spacing: spacing) {
                     ForEach(0..<7, id: \.self) { day in
-                        GridCell(habit: habit, week: week, day: day, cellSize: cellSize)
+                        OptimizedGridCell(data: data, week: week, day: day)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading) // Ensure full width
+        
+        let endTime = CFAbsoluteTimeGetCurrent()
+        NSLog("[OptimizedGridView] Grid rendering took %.3f seconds for %@", endTime - startTime, data.habit.name)
+        
+        return result
     }
 }
 
-private struct GridCell: View {
-    @EnvironmentObject var habitManager: HabitManager
-    let habit: Habit
+// Optimized grid cell with caching
+private struct OptimizedGridCell: View {
+    let data: OptimizedHabitData
     let week: Int
     let day: Int
-    let cellSize: CGFloat
+    
+    // Cache computed values to avoid recalculation
+    private var cellProperties: (color: Color, borderColor: Color) {
+        let calendar = Calendar.current
+        let cellDate = calendar.date(byAdding: .day, value: week * 7 + day, to: data.sixMonthsAgo) ?? Date()
+        let hasCapture = data.captureDates.contains(calendar.startOfDay(for: cellDate))
+        let isToday = calendar.isDateInToday(cellDate)
+        
+        let color: Color
+        if hasCapture {
+            color = data.habitColor
+        } else if isToday {
+            color = Color.white
+        } else {
+            color = Color.white
+        }
+        
+        let borderColor: Color
+        if isToday {
+            borderColor = Color.blue.opacity(0.6)
+        } else {
+            borderColor = Color.gray.opacity(0.3)
+        }
+        
+        return (color: color, borderColor: borderColor)
+    }
     
     var body: some View {
         RoundedRectangle(cornerRadius: 3)
-            .fill(gridFill(for: habit, week: week, day: day))
-            .frame(width: cellSize, height: cellSize)
+            .fill(cellProperties.color)
+            .frame(width: 10, height: 10) // Slightly larger for better visibility
             .overlay(
                 RoundedRectangle(cornerRadius: 3)
-                    .stroke(gridBorderColor(for: habit, week: week, day: day), lineWidth: 1)
+                    .stroke(cellProperties.borderColor, lineWidth: 1)
             )
     }
-    
-    private func gridFill(for habit: Habit, week: Int, day: Int) -> Color {
-        // Calculate the date for this cell (6 months ago + week * 7 + day)
-        let calendar = Calendar.current
-        let sixMonthsAgo = calendar.date(byAdding: .day, value: -180, to: Date()) ?? Date()
-        let cellDate = calendar.date(byAdding: .day, value: week * 7 + day, to: sixMonthsAgo) ?? Date()
-        
-        // Check if there are captures for this habit on this date
-        let hasCapture = habitManager.captures.contains { capture in
-            capture.habitId == habit.id && 
-            calendar.isDate(capture.createdAt, inSameDayAs: cellDate)
-        }
-        
-        // Check if this is today
-        let isToday = calendar.isDateInToday(cellDate)
-        
-        if hasCapture {
-            // Completed habit - use habit color
-            return habitColor(habit)
-        } else if isToday {
-            // Today but not completed - white background
-            return Color.white
-        } else {
-            // Not completed and not today - white background
-            return Color.white
-        }
-    }
-    
-    private func gridBorderColor(for habit: Habit, week: Int, day: Int) -> Color {
-        // Calculate the date for this cell
-        let calendar = Calendar.current
-        let sixMonthsAgo = calendar.date(byAdding: .day, value: -180, to: Date()) ?? Date()
-        let cellDate = calendar.date(byAdding: .day, value: week * 7 + day, to: sixMonthsAgo) ?? Date()
-        
-        // Check if this is today
-        let isToday = calendar.isDateInToday(cellDate)
-        
-        if isToday {
-            // Today - blue outline
-            return Color.blue.opacity(0.6)
-        } else {
-            // Not today - grey outline
-            return Color.gray.opacity(0.3)
-        }
-    }
-    
-    private func habitColor(_ habit: Habit) -> Color {
-        // Use habit's custom color if available, otherwise fall back to category color
-        if let colorString = habit.color {
-            return Color(hex: colorString)
-        }
-        return categoryColor(habit.category)
-    }
-    
-    private func categoryColor(_ category: String) -> Color {
-        // Try to find the category in the database first
-        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
-            return CaptureTheme.categoryColor(from: habitCategory.color)
-        }
-        
-        // Fallback to the existing mapping
-        switch category {
-        case "Fitness": return CaptureTheme.Palette.fitness
-        case "Wellness": return CaptureTheme.Palette.wellness
-        case "Learning": return CaptureTheme.Palette.learning
-        case "Nutrition": return CaptureTheme.Palette.nutrition
-        case "Productivity": return CaptureTheme.Palette.productivity
-        case "Health": return CaptureTheme.Palette.health
-        case "Social": return CaptureTheme.Palette.social
-        default: return .gray
-        }
-    }
 }
+    
+
+    
+
+
+
+
 
 private struct EmptyStateCard: View {
     let onCreate: () -> Void
