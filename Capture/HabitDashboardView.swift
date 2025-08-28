@@ -34,154 +34,113 @@ struct HabitDashboardView: View {
     
     let onNavigateToCamera: (UUID) -> Void
     
+    // MARK: - Computed Views
+    private var appHeader: some View {
+        HStack {
+            Text("Capture")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.primary)
+        }
+        .padding(.top, -8)
+    }
+    
+    private var greetingCard: some View {
+        GreetingCard(
+            userName: displayName,
+            quote: persistedQuote ?? motivationalQuote,
+            totalStreak: animatedTotalStreak,
+            longestStreak: animatedLongestStreak,
+            todayPercent: animatedTodayPercent,
+            weeklyPercentage: weeklySummary.weeklyPercentage,
+            weeklyCompletions: weeklySummary.totalCompletions,
+            isCollapsed: greetingCollapsed,
+            onToggleCollapse: { greetingCollapsed.toggle() }
+        )
+        .padding(.horizontal)
+        .onAppear {
+            if persistedQuote == nil { persistedQuote = motivationalQuote }
+            animateStatsIfNeeded()
+        }
+    }
+    
+    private var mainContent: some View {
+        Group {
+            if habitManager.habits.isEmpty {
+                EmptyHabitsView { showingHabitPicker = true }
+            } else {
+                VStack(spacing: 12) {
+                    sectionHeader
+                    tabPicker
+                    tabContent
+                }
+            }
+        }
+    }
+    
+    private var sectionHeader: some View {
+        HStack {
+            HStack(spacing: 6) {
+                Text("Your Habits").font(.headline)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                habitsCollapsed.toggle()
+            }
+            Button(action: { habitsCollapsed.toggle() }) {
+                Image(systemName: habitsCollapsed ? "chevron.down" : "chevron.up")
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button(action: { showingHabitPicker = true }) {
+                Image(systemName: "plus").font(.system(size: 14)).foregroundColor(.white)
+                    .padding(8)
+                    .background(Color.black)
+                    .clipShape(Circle())
+            }
+        }
+        .padding(.horizontal)
+    }
+    
+    private var tabPicker: some View {
+        Picker("View", selection: $selectedTab) {
+            Text("Overview").tag("overview")
+            Text("Progress Grid").tag("grid")
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
+    }
+    
+    private var tabContent: some View {
+        VStack(spacing: 12) {
+            if selectedTab == "overview" {
+                if habitsCollapsed {
+                    CollapsedHabitsList(onCapture: onNavigateToCamera)
+                        .padding(.horizontal)
+                        .padding(.bottom, 40)
+                } else {
+                    expandedHabitsList
+                }
+            } else {
+                ProgressGridList()
+                    .padding(.horizontal)
+                    .padding(.bottom, 40)
+            }
+        }
+    }
+    
+    private var expandedHabitsList: some View {
+        ForEach(sortedHabits) { habit in
+            HabitCardView(habit: habit, onCapture: onNavigateToCamera)
+        }
+    }
+    
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 12) {
-                                        // App Header with centered title and collapse button
-                    HStack {
-//                        Spacer().frame(width: 40)
-                        Text("Capture")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(.primary)
-                        
-                    }
-                    .padding(.top, -8)
-                    
-                    // Greeting card with stats and weekly summary inside
-                    GreetingCard(
-                        userName: displayName,
-                        quote: persistedQuote ?? motivationalQuote,
-                        totalStreak: animatedTotalStreak,
-                        longestStreak: animatedLongestStreak,
-                        todayPercent: animatedTodayPercent,
-                        weeklyPercentage: weeklySummary.weeklyPercentage,
-                        weeklyCompletions: weeklySummary.totalCompletions,
-                        isCollapsed: greetingCollapsed,
-                        onToggleCollapse: { greetingCollapsed.toggle() }
-                    )
-                    .padding(.horizontal)
-                    .onAppear {
-                        if persistedQuote == nil { persistedQuote = motivationalQuote }
-                        animateStatsIfNeeded()
-                    }
-                    
-                    // Main content area
-                    if habitManager.habits.isEmpty {
-                        EmptyHabitsView { showingHabitPicker = true }
-                    } else {
-                        // Section header
-                        HStack {
-                            HStack(spacing: 6) {
-//                                Image(systemName: "bolt.fill").foregroundColor(.yellow)
-                                Text("Your Habits").font(.headline)
-                            }
-                            Button(action: { habitsCollapsed.toggle() }) {
-                                Image(systemName: habitsCollapsed ? "chevron.down" : "chevron.up")
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            Button(action: { showingHabitPicker = true }) {
-                                Image(systemName: "plus").font(.system(size: 14)).foregroundColor(.white)
-                                    .padding(8)
-                                    .background(Color.black)
-                                    .clipShape(Circle())
-                            }
-                        }
-                        .padding(.horizontal)
-                        
-                        // Tabs (Overview/Grid)
-                        Picker("View", selection: $selectedTab) {
-                            Text("Overview").tag("overview")
-                            Text("Progress Grid").tag("grid")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal)
-                        
-                        VStack(spacing: 12) {
-                            if selectedTab == "overview" {
-                                if habitsCollapsed {
-                                    CollapsedHabitsList(onCapture: onNavigateToCamera)
-                                        .padding(.horizontal)
-                                } else {
-                                    // Expanded cards
-                                    ForEach(sortedHabits) { habit in
-                                        VStack(alignment: .leading, spacing: 10) {
-                                            HStack {
-                                                Text(habit.name).font(.headline)
-                                                Spacer()
-                                                Button(action: { onNavigateToCamera(habit.id) }) {
-                                                    Image(systemName: "camera.aperture").font(.system(size: 18)).foregroundColor(.primary)
-                                                }
-                                            }
-                                            
-                                            // Category and streak display
-                                            HStack {
-                                                // Category display
-                                                Text(habit.category)
-                                                    .font(.caption)
-                                                    .fontWeight(.medium)
-                                                    .padding(.horizontal, 8).padding(.vertical, 4)
-                                                    .background(categoryColor(habit.category).opacity(0.2))
-                                                    .foregroundColor(categoryColor(habit.category))
-                                                    .cornerRadius(8)
-                                                
-                                                // Streak display adjacent to category
-                                                let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
-                                                HStack(spacing: 6) {
-                                                    Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 14))
-                                                    Text("\(streakValue)").font(.system(size: 14, weight: .bold)).foregroundColor(.orange)
-                                                }
-                                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                                .background(Color.orange.opacity(0.15))
-                                                .cornerRadius(8)
-                                                
-                                                Spacer()
-                                            }
-                                            HStack {
-                                                let p = habitManager.progress(for: habit.id)
-                                                Text(p?.period.capitalized ?? habit.targetFrequency.capitalized)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                Spacer()
-                                                Text("\(p?.completedCount ?? 0)/\(p?.target ?? max(1, habit.targetCount ?? 1))")
-                                                    .font(.caption)
-                                                    .foregroundColor(p?.isComplete == true ? .green : .secondary)
-                                                
-                                                // Target achieved indicator next to progress count
-                                                if let p = habitManager.progress(for: habit.id), p.isComplete {
-                                                    HStack(spacing: 4) {
-                                                        Image(systemName: "target").foregroundColor(.green).font(.system(size: 10))
-                                                        Text("Target achieved")
-                                                            .font(.caption2)
-                                                            .foregroundColor(.green)
-                                                    }
-                                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                                    .background(Color.green.opacity(0.1))
-                                                    .cornerRadius(6)
-                                                }
-                                            }
-                                            GradientProgressBar(percentage: {
-                                                let p = habitManager.progress(for: habit.id)
-                                                let target = max(1, p?.target ?? max(1, habit.targetCount ?? 1))
-                                                let current = Double(p?.completedCount ?? 0)
-                                                return min(100, (current / Double(target)) * 100)
-                                            }())
-                                        }
-                                        .padding(14)
-                                        .background(Color(.systemBackground))
-                                        .cornerRadius(14)
-                                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(CaptureTheme.Palette.border, lineWidth: 1))
-                                        .padding(.horizontal)
-                                    }
-                                }
-                            } else {
-                                ProgressGridList()
-                                    .padding(.horizontal)
-                            }
-                        }
-
-                    }
+                    appHeader
+                    greetingCard
+                    mainContent
                 }
                 .padding(.vertical)
             }
@@ -201,6 +160,7 @@ struct HabitDashboardView: View {
             }
             .task { 
                 await habitManager.loadHabits()
+                await habitManager.loadHabitCategories()
                 // Preload habit capture images after habits are loaded
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
@@ -208,6 +168,7 @@ struct HabitDashboardView: View {
                 if isAuthed { 
                     Task { 
                         await habitManager.loadHabits()
+                        await habitManager.loadHabitCategories()
                         // Preload habit capture images after habits are loaded
                         imagePreloader.preloadHabitCaptures(habitManager.captures)
                     } 
@@ -215,6 +176,7 @@ struct HabitDashboardView: View {
             }
             .refreshable { 
                 await habitManager.loadHabits()
+                await habitManager.loadHabitCategories()
                 // Preload habit capture images after habits are loaded
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
@@ -300,17 +262,8 @@ struct HabitDashboardView: View {
             return CaptureTheme.categoryColor(from: habitCategory.color)
         }
         
-        // Fallback to the existing mapping
-        switch category {
-        case "Fitness": return CaptureTheme.Palette.fitness
-        case "Wellness": return CaptureTheme.Palette.wellness
-        case "Learning": return CaptureTheme.Palette.learning
-        case "Nutrition": return CaptureTheme.Palette.nutrition
-        case "Productivity": return CaptureTheme.Palette.productivity
-        case "Health": return CaptureTheme.Palette.health
-        case "Social": return CaptureTheme.Palette.social
-        default: return .gray
-        }
+        // Default to gray if category not found
+        return .gray
     }
     
     private func animateStatsIfNeeded() {
@@ -347,6 +300,95 @@ struct HabitDashboardView: View {
     }
 }
 
+// MARK: - Habit Card View
+private struct HabitCardView: View {
+    let habit: Habit
+    let onCapture: (UUID) -> Void
+    @EnvironmentObject var habitManager: HabitManager
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(habit.name).font(.headline)
+                Spacer()
+                Button(action: { onCapture(habit.id) }) {
+                    Image(systemName: "camera.aperture").font(.system(size: 18)).foregroundColor(.primary)
+                }
+            }
+            
+            // Category and streak display
+            HStack {
+                // Category display
+                Text(habit.category)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(categoryColor(habit.category).opacity(0.2))
+                    .foregroundColor(categoryColor(habit.category))
+                    .cornerRadius(8)
+                
+                // Streak display adjacent to category
+                let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
+                HStack(spacing: 6) {
+                    Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 14))
+                    Text("\(streakValue)").font(.system(size: 14, weight: .bold)).foregroundColor(.orange)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.orange.opacity(0.15))
+                .cornerRadius(8)
+                
+                Spacer()
+            }
+            
+            HStack {
+                let p = habitManager.progress(for: habit.id)
+                Text(p?.period.capitalized ?? habit.targetFrequency.capitalized)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(p?.completedCount ?? 0)/\(p?.target ?? max(1, habit.targetCount ?? 1))")
+                    .font(.caption)
+                    .foregroundColor(p?.isComplete == true ? .green : .secondary)
+                
+                // Target achieved indicator next to progress count
+                if let p = habitManager.progress(for: habit.id), p.isComplete {
+                    HStack(spacing: 4) {
+                        Image(systemName: "target").foregroundColor(.green).font(.system(size: 10))
+                        Text("Target achieved")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(6)
+                }
+            }
+            
+            GradientProgressBar(percentage: {
+                let p = habitManager.progress(for: habit.id)
+                let target = max(1, p?.target ?? max(1, habit.targetCount ?? 1))
+                let current = Double(p?.completedCount ?? 0)
+                return min(100, (current / Double(target)) * 100)
+            }())
+        }
+        .padding(14)
+        .background(Color(.systemBackground))
+        .cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(CaptureTheme.Palette.border, lineWidth: 1))
+        .padding(.horizontal)
+    }
+    
+    private func categoryColor(_ category: String) -> Color {
+        // Try to find the category in the database first
+        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
+            return CaptureTheme.categoryColor(from: habitCategory.color)
+        }
+        
+        // Default to gray if category not found
+        return .gray
+    }
+}
+
 private struct GreetingCard: View {
     let userName: String
     let quote: String
@@ -360,7 +402,7 @@ private struct GreetingCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Greeting row with more weight
+            // Greeting row with more weight - entire row is clickable
             HStack(spacing: 10) {
                 Image(systemName: timeIconName)
                     .font(.system(size: 22, weight: .heavy))
@@ -371,16 +413,15 @@ private struct GreetingCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Spacer()
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        onToggleCollapse()
-                    }
-                }) {
-                    Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.secondary)
+                Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .contentShape(Rectangle()) // Make entire row clickable
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    onToggleCollapse()
                 }
-                .buttonStyle(.plain)
             }
             
             if !isCollapsed {
@@ -697,17 +738,8 @@ private struct CollapsedHabitsList: View {
             return CaptureTheme.categoryColor(from: habitCategory.color)
         }
         
-        // Fallback to the existing mapping
-        switch category {
-        case "Fitness": return CaptureTheme.Palette.fitness
-        case "Wellness": return CaptureTheme.Palette.wellness
-        case "Learning": return CaptureTheme.Palette.learning
-        case "Nutrition": return CaptureTheme.Palette.nutrition
-        case "Productivity": return CaptureTheme.Palette.productivity
-        case "Health": return CaptureTheme.Palette.health
-        case "Social": return CaptureTheme.Palette.social
-        default: return .gray
-        }
+        // Default to gray if category not found
+        return .gray
     }
     
     private func singularPeriod(_ period: String) -> String {
@@ -763,8 +795,8 @@ private struct ExpandedHabitsList: View {
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Color.blue.opacity(0.2))
-                        .foregroundColor(.blue)
+                        .background(categoryColor(habit.category).opacity(0.2))
+                        .foregroundColor(categoryColor(habit.category))
                         .cornerRadius(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .onAppear {
@@ -813,17 +845,8 @@ private struct ExpandedHabitsList: View {
             return CaptureTheme.categoryColor(from: habitCategory.color)
         }
         
-        // Fallback to the existing mapping
-        switch category {
-        case "Fitness": return CaptureTheme.Palette.fitness
-        case "Wellness": return CaptureTheme.Palette.wellness
-        case "Learning": return CaptureTheme.Palette.learning
-        case "Nutrition": return CaptureTheme.Palette.nutrition
-        case "Productivity": return CaptureTheme.Palette.productivity
-        case "Health": return CaptureTheme.Palette.health
-        case "Social": return CaptureTheme.Palette.social
-        default: return .gray
-        }
+        // Default to gray if category not found
+        return .gray
     }
     
     private func singularPeriod(_ period: String) -> String {
@@ -864,25 +887,20 @@ private struct ProgressGridList: View {
         let shouldUpdate = Date().timeIntervalSince(lastUpdateTime) > 300 || cachedHabitData.isEmpty
         
         if !shouldUpdate {
-            NSLog("[ProgressGridList] Using cached data for %d habits", cachedHabitData.count)
             return cachedHabitData
         }
         
         // Prevent multiple simultaneous computations
         if isComputing {
-            NSLog("[ProgressGridList] Already computing, returning cached data")
             return cachedHabitData
         }
         
-        NSLog("[ProgressGridList] Cache expired, recomputing data for %d habits", habitManager.habits.count)
         isComputing = true
-        let startTime = CFAbsoluteTimeGetCurrent()
         
         let calendar = Calendar.current
         let sixMonthsAgo = calendar.date(byAdding: .day, value: -180, to: Date()) ?? Date()
         let today = Date()
         
-        NSLog("[ProgressGridList] Computing sorted habits...")
         let sortedHabits = habitManager.habits.sorted { habit1, habit2 in
             let habit1Completed = habitManager.progress(for: habit1.id)?.isComplete == true
             let habit2Completed = habitManager.progress(for: habit2.id)?.isComplete == true
@@ -893,28 +911,15 @@ private struct ProgressGridList: View {
             return habit1.name < habit2.name
         }
         
-        NSLog("[ProgressGridList] Processing %d habits...", sortedHabits.count)
         let result = sortedHabits.map { habit in
-            NSLog("[ProgressGridList] Processing habit: %@", habit.name)
-            let habitStartTime = CFAbsoluteTimeGetCurrent()
-            
             let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
-            NSLog("[ProgressGridList] Got streak value: %d for %@", streakValue, habit.name)
-            
             let captureCount = habitManager.captures.filter { $0.userHabitId == habit.id }.count
-            NSLog("[ProgressGridList] Got capture count: %d for %@", captureCount, habit.name)
-            
             let habitColor = getHabitColor(habit)
-            NSLog("[ProgressGridList] Got color for %@", habit.name)
             
             // Pre-compute capture dates for this habit
             let captureDates = Set(habitManager.captures
                 .filter { $0.userHabitId == habit.id }
                 .map { calendar.startOfDay(for: $0.createdAt) })
-            NSLog("[ProgressGridList] Computed %d capture dates for %@", captureDates.count, habit.name)
-            
-            let habitEndTime = CFAbsoluteTimeGetCurrent()
-            NSLog("[ProgressGridList] Habit %@ processed in %.3f seconds", habit.name, habitEndTime - habitStartTime)
             
             return OptimizedHabitData(
                 habit: habit,
@@ -927,9 +932,6 @@ private struct ProgressGridList: View {
             )
         }
         
-        let endTime = CFAbsoluteTimeGetCurrent()
-        NSLog("[ProgressGridList] Total data computation took %.3f seconds for %d habits", endTime - startTime, result.count)
-        
         // Update cache
         DispatchQueue.main.async {
             self.cachedHabitData = result
@@ -941,35 +943,25 @@ private struct ProgressGridList: View {
     }
     
     var body: some View {
-        NSLog("[ProgressGridList] Rendering body with %d habits", optimizedHabitData.count)
-        let startTime = CFAbsoluteTimeGetCurrent()
-        
-        let result = VStack(spacing: 16) {
+        VStack(spacing: 16) {
             if optimizedHabitData.isEmpty {
                 ProgressView("Loading progress grid...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LazyVStack(spacing: 16) {
+                VStack(spacing: 16) {
                     ForEach(optimizedHabitData) { data in
-                        OptimizedHabitGridCard(data: data, weeks: weeks, spacing: spacing)
-                            .onAppear {
-                                NSLog("[ProgressGridList] Habit card appeared: %@", data.habit.name)
-                            }
+                        let dataSource = HabitProgressGridDataSource(habit: data.habit, habitManager: habitManager)
+                        ProgressGridView(dataSource: dataSource)
                     }
                 }
             }
         }
-        .onAppear {
-            NSLog("[ProgressGridList] ProgressGridList appeared")
+        .onChange(of: habitManager.habitCategories.count) { _ in
+            // Clear cache when categories are loaded so colors are recomputed
+            cachedHabitData = []
+            lastUpdateTime = Date.distantPast
+            print("🔄 ProgressGridList: Cleared cache due to category change")
         }
-        .onDisappear {
-            NSLog("[ProgressGridList] ProgressGridList disappeared")
-        }
-        
-        let endTime = CFAbsoluteTimeGetCurrent()
-        NSLog("[ProgressGridList] Body rendering took %.3f seconds", endTime - startTime)
-        
-        return result
     }
     
     // Cached color lookup
@@ -982,16 +974,8 @@ private struct ProgressGridList: View {
             return CaptureTheme.categoryColor(from: habitCategory.color)
         }
         
-        switch habit.category {
-        case "Fitness": return CaptureTheme.Palette.fitness
-        case "Wellness": return CaptureTheme.Palette.wellness
-        case "Learning": return CaptureTheme.Palette.learning
-        case "Nutrition": return CaptureTheme.Palette.nutrition
-        case "Productivity": return CaptureTheme.Palette.productivity
-        case "Health": return CaptureTheme.Palette.health
-        case "Social": return CaptureTheme.Palette.social
-        default: return .gray
-        }
+        // Default to gray if category not found
+        return .gray
     }
 }
 
@@ -1008,123 +992,7 @@ private struct OptimizedHabitData: Identifiable {
     var id: UUID { habit.id }
 }
 
-// Optimized grid card
-private struct OptimizedHabitGridCard: View {
-    let data: OptimizedHabitData
-    let weeks: Int
-    let spacing: CGFloat
-    
-    var body: some View {
-        NSLog("[OptimizedHabitGridCard] Rendering card for: %@", data.habit.name)
-        let startTime = CFAbsoluteTimeGetCurrent()
-        
-        let result = VStack(alignment: .leading, spacing: 6) {
-            // Header with habit name and streak
-            VStack(alignment: .leading, spacing: 4) {
-                Text(data.habit.name).font(.subheadline).fontWeight(.semibold)
-                
-                HStack(spacing: 4) {
-                    Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 10))
-                    Text("\(data.streakValue) day streak").font(.system(size: 12)).foregroundColor(.secondary)
-                }
-            }
-            
-            // Optimized grid without GeometryReader
-            OptimizedGridView(
-                data: data,
-                weeks: weeks,
-                spacing: spacing
-            )
-            
-            // Footer total captures
-            Text("\(data.captureCount) captures in the last 6 months")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.top, 2)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading) // Fix width issue
-        .background(Color(.systemBackground))
-        .cornerRadius(20)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(CaptureTheme.Palette.border, lineWidth: 1))
-        
-        let endTime = CFAbsoluteTimeGetCurrent()
-        NSLog("[OptimizedHabitGridCard] Card rendering took %.3f seconds for %@", endTime - startTime, data.habit.name)
-        
-        return result
-    }
-}
 
-// Optimized grid view without GeometryReader
-private struct OptimizedGridView: View {
-    let data: OptimizedHabitData
-    let weeks: Int
-    let spacing: CGFloat
-    
-    var body: some View {
-        NSLog("[OptimizedGridView] Rendering grid for: %@", data.habit.name)
-        let startTime = CFAbsoluteTimeGetCurrent()
-        
-        let result = HStack(alignment: .top, spacing: spacing) {
-            ForEach(0..<weeks, id: \.self) { week in
-                VStack(spacing: spacing) {
-                    ForEach(0..<7, id: \.self) { day in
-                        OptimizedGridCell(data: data, week: week, day: day)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading) // Ensure full width
-        
-        let endTime = CFAbsoluteTimeGetCurrent()
-        NSLog("[OptimizedGridView] Grid rendering took %.3f seconds for %@", endTime - startTime, data.habit.name)
-        
-        return result
-    }
-}
-
-// Optimized grid cell with caching
-private struct OptimizedGridCell: View {
-    let data: OptimizedHabitData
-    let week: Int
-    let day: Int
-    
-    // Cache computed values to avoid recalculation
-    private var cellProperties: (color: Color, borderColor: Color) {
-        let calendar = Calendar.current
-        let cellDate = calendar.date(byAdding: .day, value: week * 7 + day, to: data.sixMonthsAgo) ?? Date()
-        let hasCapture = data.captureDates.contains(calendar.startOfDay(for: cellDate))
-        let isToday = calendar.isDateInToday(cellDate)
-        
-        let color: Color
-        if hasCapture {
-            color = data.habitColor
-        } else if isToday {
-            color = Color.white
-        } else {
-            color = Color.white
-        }
-        
-        let borderColor: Color
-        if isToday {
-            borderColor = Color.blue.opacity(0.6)
-        } else {
-            borderColor = Color.gray.opacity(0.3)
-        }
-        
-        return (color: color, borderColor: borderColor)
-    }
-    
-    var body: some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(cellProperties.color)
-            .frame(width: 10, height: 10) // Slightly larger for better visibility
-            .overlay(
-                RoundedRectangle(cornerRadius: 3)
-                    .stroke(cellProperties.borderColor, lineWidth: 1)
-            )
-    }
-}
     
 
     
