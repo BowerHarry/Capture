@@ -189,10 +189,10 @@ class SupabaseManager {
             throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
         
-        NSLog("[SupabaseManager] getHabits: fetching habits for user %@", currentUser.id.uuidString)
+
         
         do {
-            NSLog("[SupabaseManager] getHabits: starting to fetch user habits...")
+
             
             // Get user habits using the new decoupled schema
             let userHabits: [UserHabit] = try await client.database
@@ -204,16 +204,16 @@ class SupabaseManager {
                 .execute()
                 .value
             
-            NSLog("[SupabaseManager] getHabits: successfully fetched %d user habits", userHabits.count)
+
             
             // Convert to legacy Habit format for backward compatibility
             var habits: [Habit] = []
             
             for (index, userHabit) in userHabits.enumerated() {
-                NSLog("[SupabaseManager] getHabits: processing user habit %d/%d: %@", index + 1, userHabits.count, userHabit.id.uuidString)
+
                 
                 do {
-                    NSLog("[SupabaseManager] getHabits: fetching template for habit %@", userHabit.habitTemplateId.uuidString)
+
                     
                     let templateRows: [HabitTemplate] = try await client.database
                         .from("habit_templates")
@@ -223,14 +223,14 @@ class SupabaseManager {
                         .execute()
                         .value
                     
-                    NSLog("[SupabaseManager] getHabits: found %d templates for habit %@", templateRows.count, userHabit.id.uuidString)
+
                     
                     guard let template = templateRows.first else {
-                        NSLog("[SupabaseManager] getHabits: template not found for habit %@", userHabit.id.uuidString)
+
                         continue
                     }
                     
-                    NSLog("[SupabaseManager] getHabits: creating Habit object for %@ with template %@", userHabit.id.uuidString, template.name)
+
                     
                     let habit = Habit(
                         id: userHabit.id,
@@ -249,7 +249,7 @@ class SupabaseManager {
                         userId: userHabit.userId
                     )
                     
-                    NSLog("[SupabaseManager] getHabits: successfully created Habit object: %@", habit.name)
+
                     habits.append(habit)
                     
                 } catch {
@@ -546,14 +546,10 @@ class SupabaseManager {
     
     // MARK: - Captures fetch
     func getCapturesSince(since: Date) async throws -> [HabitCapture] {
-        NSLog("[SupabaseManager] getCapturesSince: starting fetch for captures since %@", since.description)
-        
         let session = try await client.auth.session
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let sinceStr = iso.string(from: since)
-        
-        NSLog("[SupabaseManager] getCapturesSince: querying captures for user %@ since %@", session.user.id.uuidString, sinceStr)
         
         do {
             let rows: [HabitCapture] = try await client.database
@@ -566,11 +562,8 @@ class SupabaseManager {
                 .execute()
                 .value
             
-            NSLog("[SupabaseManager] getCapturesSince: successfully fetched %d captures", rows.count)
-            
             // Filter out any captures with nil userHabitId (additional safety check)
             let filteredRows = rows.filter { $0.userHabitId != nil }
-            NSLog("[SupabaseManager] getCapturesSince: filtered out %d captures with nil userHabitId", rows.count - filteredRows.count)
             return filteredRows
         } catch {
             NSLog("[SupabaseManager] getCapturesSince: error %@", error.localizedDescription)
@@ -634,7 +627,6 @@ class SupabaseManager {
             
             // Get all unique template IDs
             let templateIds = Set(userHabits.map { $0.habitTemplateId })
-            NSLog("[SupabaseManager] getProgressGridData: fetching %d unique templates", templateIds.count)
             
             // Batch fetch all templates
             let allTemplates: [HabitTemplate] = try await client.database
@@ -644,14 +636,11 @@ class SupabaseManager {
                 .execute()
                 .value
             
-            NSLog("[SupabaseManager] getProgressGridData: successfully fetched %d templates", allTemplates.count)
-            
             // Create a dictionary for quick template lookup
             let templateDict = Dictionary(uniqueKeysWithValues: allTemplates.map { ($0.id, $0) })
             
             for userHabit in userHabits {
                 guard let template = templateDict[userHabit.habitTemplateId] else {
-                    NSLog("[SupabaseManager] getProgressGridData: template not found for habit %@", userHabit.id.uuidString)
                     continue
                 }
                 
@@ -675,7 +664,6 @@ class SupabaseManager {
                 habits.append(habit)
             }
             
-            NSLog("[SupabaseManager] getProgressGridData: successfully processed %d habits and %d captures", habits.count, captures.count)
             return (habits: habits, captures: captures)
             
         } catch {
@@ -703,14 +691,10 @@ class SupabaseManager {
     
     // MARK: - Optimized Database Function Query
     func getProgressGridDataOptimized(since: Date) async throws -> (habits: [Habit], captures: [HabitCapture]) {
-        NSLog("[SupabaseManager] getProgressGridDataOptimized: starting optimized database function query since %@", since.description)
-        
         let session = try await client.auth.session
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let sinceStr = iso.string(from: since)
-        
-        NSLog("[SupabaseManager] getProgressGridDataOptimized: querying optimized function for user %@ since %@", session.user.id.uuidString, sinceStr)
         
         do {
             // Use the optimized database function
@@ -725,8 +709,6 @@ class SupabaseManager {
                 NSLog("[SupabaseManager] getProgressGridDataOptimized: failed to cast response to expected type")
                 throw NSError(domain: "DatabaseError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from database function"])
             }
-            
-            NSLog("[SupabaseManager] getProgressGridDataOptimized: successfully fetched %d rows from database function", rows.count)
             
             // Process the results to separate habits and captures
             var habitsDict: [UUID: Habit] = [:]
@@ -778,7 +760,6 @@ class SupabaseManager {
             }
             
             let habits = Array(habitsDict.values)
-            NSLog("[SupabaseManager] getProgressGridDataOptimized: successfully processed %d habits and %d captures", habits.count, captures.count)
             return (habits: habits, captures: captures)
             
         } catch {

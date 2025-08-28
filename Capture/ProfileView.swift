@@ -517,7 +517,8 @@ struct OverviewTabView: View {
             }
             
             // Progress Grid for last 6 months
-            ProfileProgressGrid(habitManager: habitManager)
+            let dataSource = UserProgressGridDataSource(userCaptures: habitManager.captures)
+            ProgressGridView(dataSource: dataSource)
             
         }
         .padding(20)
@@ -1221,119 +1222,7 @@ struct AvatarPickerView: View {
     }
 }
 
-// MARK: - Profile Progress Grid
 
-struct ProfileProgressGrid: View {
-    let habitManager: HabitManager
-    let weeks: Int = 26 // ~6 months
-    let spacing: CGFloat = 3
-    
-    private var dailyCompletionData: [Date: Int] {
-        var data: [Date: Int] = [:]
-        let calendar = Calendar.current
-        let today = Date()
-        
-        // Get captures for the last 6 months
-        let sixMonthsAgo = calendar.date(byAdding: .month, value: -6, to: today) ?? today
-        
-        for capture in habitManager.captures {
-            if capture.createdAt >= sixMonthsAgo {
-                let dayStart = calendar.startOfDay(for: capture.createdAt)
-                data[dayStart, default: 0] += 1
-            }
-        }
-        
-        return data
-    }
-    
-    private var maxCompletionsPerDay: Int {
-        dailyCompletionData.values.max() ?? 1
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("6 Month Progress")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.primary)
-            
-            ZStack(alignment: .topLeading) {
-                GeometryReader { proxy in
-                    let totalWidth = proxy.size.width
-                    let cellSize = (totalWidth - CGFloat(weeks - 1) * spacing) / CGFloat(weeks)
-                    let gridHeight = cellSize * 7 + spacing * 6
-                    
-                    ProfileGridContentView(
-                        weeks: weeks,
-                        spacing: spacing,
-                        cellSize: cellSize,
-                        dailyCompletionData: dailyCompletionData,
-                        maxCompletionsPerDay: maxCompletionsPerDay
-                    )
-                    .frame(width: totalWidth, height: gridHeight, alignment: .topLeading)
-                }
-            }
-            .frame(height: 80)
-        }
-        .padding(16)
-        .background(Color(.systemBackground))
-        .cornerRadius(20)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color(.systemGray5), lineWidth: 1)
-        )
-    }
-}
-
-struct ProfileGridContentView: View {
-    let weeks: Int
-    let spacing: CGFloat
-    let cellSize: CGFloat
-    let dailyCompletionData: [Date: Int]
-    let maxCompletionsPerDay: Int
-    
-    var body: some View {
-        VStack(spacing: spacing) {
-            ForEach(0..<7, id: \.self) { dayOfWeek in
-                HStack(spacing: spacing) {
-                    ForEach(0..<weeks, id: \.self) { week in
-                        let date = getDate(for: week, dayOfWeek: dayOfWeek)
-                        let completions = dailyCompletionData[date] ?? 0
-                        let intensity = maxCompletionsPerDay > 0 ? Double(completions) / Double(maxCompletionsPerDay) : 0
-                        
-                        Rectangle()
-                            .fill(getColorForIntensity(intensity))
-                            .frame(width: cellSize, height: cellSize)
-                            .cornerRadius(2)
-                    }
-                }
-            }
-        }
-    }
-    
-    private func getDate(for week: Int, dayOfWeek: Int) -> Date {
-        let calendar = Calendar.current
-        let today = Date()
-        let startOfToday = calendar.startOfDay(for: today)
-        
-        // Calculate the date for this grid position
-        let daysFromToday = (week * 7 + dayOfWeek) - (weeks * 7 - 1)
-        return calendar.date(byAdding: .day, value: daysFromToday, to: startOfToday) ?? today
-    }
-    
-    private func getColorForIntensity(_ intensity: Double) -> Color {
-        if intensity == 0 {
-            return Color(.systemGray6)
-        } else if intensity <= 0.25 {
-            return Color.green.opacity(0.3)
-        } else if intensity <= 0.5 {
-            return Color.green.opacity(0.6)
-        } else if intensity <= 0.75 {
-            return Color.green.opacity(0.8)
-        } else {
-            return Color.green
-        }
-    }
-}
 
 // MARK: - Supporting Types
 

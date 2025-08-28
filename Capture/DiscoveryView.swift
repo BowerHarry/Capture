@@ -18,7 +18,7 @@ struct DiscoveryView: View {
         NavigationView {
             VStack(spacing: 0) {
                 // Search Bar (visible on all tabs)
-                SearchBar(text: $searchQuery)
+                SearchBar(text: $searchQuery, placeholder: searchPlaceholder)
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
                     .onChange(of: searchQuery) { newValue in
@@ -205,6 +205,19 @@ struct DiscoveryView: View {
                 habit.name.localizedCaseInsensitiveContains(searchQuery) ||
                 habit.category.localizedCaseInsensitiveContains(searchQuery)
             }
+        }
+    }
+    
+    private var searchPlaceholder: String {
+        switch selectedTab {
+        case 0:
+            return "Search for trending habits"
+        case 1:
+            return "Search for habits"
+        case 2:
+            return "Search for users"
+        default:
+            return "Search..."
         }
     }
     
@@ -541,6 +554,7 @@ struct UserListItem: View {
 struct SearchBar: View {
     @Binding var text: String
     @FocusState private var isFocused: Bool
+    let placeholder: String
     
     var body: some View {
         HStack {
@@ -548,7 +562,7 @@ struct SearchBar: View {
                 .foregroundColor(.secondary)
                 .font(.system(size: 16))
             
-            TextField("Search...", text: $text)
+            TextField(placeholder, text: $text)
                 .textFieldStyle(PlainTextFieldStyle())
                 .focused($isFocused)
                 .onSubmit {
@@ -556,7 +570,7 @@ struct SearchBar: View {
                 }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .background(Color(.systemGray6))
         .cornerRadius(8)
     }
@@ -580,7 +594,7 @@ struct CategoriesSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Popular Categories")
-                .font(.title2)
+                .font(.headline)
                 .fontWeight(.medium)
             
             CategoryFlowLayout(categories: categories) { category in
@@ -651,7 +665,7 @@ struct TrendingHabitsSection: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(sectionTitle)
-                    .font(.title2)
+                    .font(.headline)
                     .fontWeight(.medium)
                 
                 Spacer()
