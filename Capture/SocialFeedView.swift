@@ -5,9 +5,11 @@ struct SocialFeedView: View {
     @EnvironmentObject var habitManager: HabitManager
     @StateObject private var imagePreloader = ImagePreloader.shared
     @State private var selectedTab = 0
-    @State private var showingCreatePost = false
+    @State private var feedGroups: [SocialFeedGroup] = []
+    @State private var isLoading = false
+    @State private var selectedCaptures: [String: UUID] = [:] // groupId -> selected captureId
     @State private var showingComments = false
-    @State private var selectedPost: SocialPost?
+    @State private var selectedCaptureForComments: SocialFeedCapture?
     @State private var refreshTrigger = false
     
     var body: some View {
@@ -21,19 +23,12 @@ struct SocialFeedView: View {
                             .fontWeight(.bold)
                         
                         Spacer()
-                        
-                        Button(action: { showingCreatePost = true }) {
-                            Image(systemName: "plus")
-                                .font(.title2)
-                                .foregroundColor(.primary)
-                        }
                     }
                     
                     // Tab Picker
                     Picker("Feed Tab", selection: $selectedTab) {
-                        Text("Following").tag(0)
-                        Text("For You").tag(1)
-                        Text("Trending").tag(2)
+                        Text("Feed").tag(0)
+                        Text("Groups").tag(1)
                     }
                     .pickerStyle(SegmentedPickerStyle())
                 }
@@ -42,250 +37,181 @@ struct SocialFeedView: View {
                 
                 // Content
                 TabView(selection: $selectedTab) {
-                    FollowingFeedView()
-                        .tag(0)
+                    SocialFeedTabView(
+                        feedGroups: feedGroups,
+                        isLoading: isLoading,
+                        selectedCaptures: $selectedCaptures,
+                        onReactionToggle: handleReactionToggle,
+                        onCommentTap: handleCommentTap
+                    )
+                    .tag(0)
                     
-                    ForYouFeedView()
+                    SocialGroupsTabView()
                         .tag(1)
-                    
-                    TrendingFeedView()
-                        .tag(2)
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
             }
             .navigationBarHidden(true)
             .task {
-                await socialManager.loadPosts()
-                // Preload social feed images after posts are loaded
-                imagePreloader.preloadSocialFeedImages(for: socialManager.posts)
+                await loadSocialFeed()
             }
             .refreshable {
                 await refreshFeed()
             }
-            .sheet(isPresented: $showingCreatePost) {
-                CreatePostView()
-            }
             .sheet(isPresented: $showingComments) {
-                if let post = selectedPost {
-                    CommentsView(post: post)
+                if let capture = selectedCaptureForComments {
+                    CaptureCommentsView(capture: capture)
                 }
             }
-            .onTapGesture {
-                self.hideKeyboard()
+            .onChange(of: selectedTab) { _, newTab in
+                if newTab == 0 {
+                    Task {
+                        await loadSocialFeed()
+                    }
+                }
             }
         }
+    }
+    
+    private func loadSocialFeed() async {
+        isLoading = true
+        do {
+            feedGroups = try await SupabaseManager.shared.getSocialFeedGroups()
+            // Preload images for the feed groups
+            await imagePreloader.preloadSocialFeedImages(for: feedGroups)
+        } catch {
+            print("Error loading social feed: \(error)")
+        }
+        isLoading = false
     }
     
     private func refreshFeed() async {
         refreshTrigger.toggle()
-        await socialManager.loadPosts()
-        // Preload social feed images after posts are loaded
-        imagePreloader.preloadSocialFeedImages(for: socialManager.posts)
+        await loadSocialFeed()
+    }
+    
+    private func handleReactionToggle(for captureId: UUID) async {
+        do {
+            let result = try await SupabaseManager.shared.toggleCaptureReaction(captureId: captureId)
+            print("Reaction toggle result: isLiked=\(result.isLiked), count=\(result.reactionCount)")
+            
+            // Update the local state - find the group that contains this capture
+            for groupIndex in feedGroups.indices {
+                if let captures = feedGroups[groupIndex].recentCaptures {
+                    for captureIndex in captures.indices {
+                        if captures[captureIndex].id == captureId {
+                            feedGroups[groupIndex].recentCaptures?[captureIndex].isLikedByCurrentUser = result.isLiked
+                            feedGroups[groupIndex].recentCaptures?[captureIndex].reactionCount = result.reactionCount
+                            // Also update the group's overall reaction count
+                            feedGroups[groupIndex].reactionCount = result.reactionCount
+                            return
+                        }
+                    }
+                }
+            }
+            
+            // If not found in recent captures, update the group's main capture
+            for groupIndex in feedGroups.indices {
+                if feedGroups[groupIndex].lastCaptureId == captureId {
+                    feedGroups[groupIndex].isLikedByCurrentUser = result.isLiked
+                    feedGroups[groupIndex].reactionCount = result.reactionCount
+                    return
+                }
+            }
+        } catch {
+            print("Error toggling reaction: \(error)")
+        }
+    }
+    
+    private func handleCommentTap(for capture: SocialFeedCapture) {
+        selectedCaptureForComments = capture
+        showingComments = true
     }
 }
 
-// MARK: - Following Feed View
+// MARK: - Social Feed Tab View
 
-struct FollowingFeedView: View {
-    @EnvironmentObject var socialManager: SocialManager
+struct SocialFeedTabView: View {
+    let feedGroups: [SocialFeedGroup]
+    let isLoading: Bool
+    @Binding var selectedCaptures: [String: UUID]
+    let onReactionToggle: (UUID) async -> Void
+    let onCommentTap: (SocialFeedCapture) -> Void
     
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 16) {
-                if socialManager.isLoading {
+                if isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 100)
-                } else if socialManager.feedItems.isEmpty {
-                    EmptyStateView(
+                } else if feedGroups.isEmpty {
+                    SocialFeedEmptyStateView(
                         icon: "person.2",
-                        title: "No posts from people you follow",
-                        subtitle: "Follow some people to see their habit journeys!"
+                        title: "No posts yet",
+                        subtitle: "Complete some habits or follow friends to see their progress here!"
                     )
                 } else {
-                    ForEach(socialManager.feedItems.filter { $0.isFollowing }) { item in
-                        SocialPostCard(item: item)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-        }
-    }
-}
-
-// MARK: - For You Feed View
-
-struct ForYouFeedView: View {
-    @EnvironmentObject var socialManager: SocialManager
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if socialManager.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if socialManager.feedItems.isEmpty {
-                    EmptyStateView(
-                        icon: "sparkles",
-                        title: "No recommendations yet",
-                        subtitle: "Start following people to get personalized recommendations!"
-                    )
-                } else {
-                    ForEach(socialManager.feedItems) { item in
-                        SocialPostCard(item: item)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-        }
-    }
-}
-
-// MARK: - Trending Feed View
-
-struct TrendingFeedView: View {
-    @EnvironmentObject var socialManager: SocialManager
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if socialManager.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if socialManager.feedItems.isEmpty {
-                    EmptyStateView(
-                        icon: "flame",
-                        title: "No trending posts",
-                        subtitle: "Be the first to create a trending post!"
-                    )
-                } else {
-                    ForEach(socialManager.feedItems.sorted { $0.post.likes > $1.post.likes }) { item in
-                        SocialPostCard(item: item)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-        }
-        .task {
-            await socialManager.getTrendingPosts()
-        }
-    }
-}
-
-// MARK: - Social Post Card
-
-struct SocialPostCard: View {
-    let item: SocialFeedItem
-    @EnvironmentObject var socialManager: SocialManager
-    @State private var showingComments = false
-    @State private var showingShare = false
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // User Header
-            HStack {
-                AsyncImage(url: URL(string: item.user.avatar ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .font(.title3)
-                                .foregroundColor(.gray)
+                    ForEach(feedGroups) { group in
+                        SocialFeedGroupCard(
+                            group: group,
+                            selectedCaptureId: selectedCaptures[group.id],
+                            onCaptureSelect: { captureId in
+                                selectedCaptures[group.id] = captureId
+                            },
+                            onReactionToggle: onReactionToggle,
+                            onCommentTap: onCommentTap
                         )
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.user.username)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    
-                    Text(timeAgoString(from: item.post.createdAt))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                Menu {
-                    if item.user.id == socialManager.currentUserId {
-                        Button("Delete", role: .destructive) {
-                            Task {
-                                await socialManager.deletePost(item.post)
-                            }
-                        }
-                    } else {
-                        Button(item.isFollowing ? "Unfollow" : "Follow") {
-                            Task {
-                                await socialManager.toggleFollow(userId: item.user.id)
-                            }
-                        }
                     }
-                    
-                    Button("Report") {
-                        // Report post
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
                 }
             }
-            
-            // Content
-            Text(item.post.content)
-                .font(.body)
-                .multilineTextAlignment(.leading)
-            
-            // Habit/Capture Info
-            if let habit = item.habit {
-                HStack {
-                    Text(habit.icon ?? "⭐️")
-                        .font(.title2)
-                        .frame(width: 32, height: 32)
-                        .background(habitColor(for: habit.color))
-                        .clipShape(Circle())
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(habit.name)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Text(habit.category)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(habit.currentStreak)")
-                            .font(.subheadline)
-                            .fontWeight(.bold)
-                            .foregroundColor(.blue)
-                        Text("day streak")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(8)
-            }
-            
-            // Image
-            if let imageUrl = item.post.imageUrl {
-                AsyncImage(url: URL(string: imageUrl)) { image in
+            .padding(.horizontal)
+            .padding(.top, 16)
+        }
+    }
+}
+
+// MARK: - Social Feed Group Card
+
+struct SocialFeedGroupCard: View {
+    let group: SocialFeedGroup
+    let selectedCaptureId: UUID?
+    let onCaptureSelect: (UUID) -> Void
+    let onReactionToggle: (UUID) async -> Void
+    let onCommentTap: (SocialFeedCapture) -> Void
+    
+    private var selectedCapture: SocialFeedCapture {
+        if let selectedId = selectedCaptureId,
+           let capture = group.recentCaptures?.first(where: { $0.id == selectedId }) {
+            return capture
+        }
+        // If no recent captures or no selection, use the last capture data from the group
+        let fallbackCapture = SocialFeedCapture(
+            id: group.lastCaptureId,
+            imageUrl: group.lastCaptureImageUrl,
+            caption: nil,
+            createdAt: group.lastCaptureCreatedAt,
+            reactionCount: group.reactionCount,
+            commentCount: group.commentCount,
+            isLikedByCurrentUser: group.isLikedByCurrentUser,
+            reactionUsers: []
+        )
+        
+
+        
+        return group.recentCaptures?.first ?? fallbackCapture
+    }
+    
+    private var otherCaptures: [SocialFeedCapture] {
+        group.recentCaptures?.filter { $0.id != selectedCapture.id } ?? []
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main Capture Image with Overlaid Header - Phone camera aspect ratio (9:16)
+            ZStack(alignment: .top) {
+                // Main image
+                AsyncImage(url: URL(string: selectedCapture.imageUrl ?? "")) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -297,68 +223,228 @@ struct SocialPostCard: View {
                                 .progressViewStyle(CircularProgressViewStyle())
                         )
                 }
-                .frame(height: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(height: 400) // 9:16 aspect ratio
+                .clipped()
+                
+                // Category Badge - Top Right
+                VStack {
+                    HStack {
+                        Spacer()
+                        SocialFeedCategoryBadge(category: group.habitCategory, color: group.habitCategoryColor)
+                            .padding(.top, 12)
+                            .padding(.trailing, 12)
+                    }
+                    Spacer()
+                }
+                
+                // Overlaid Header Information
+                VStack {
+                    // Top gradient overlay for readability
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.6), Color.black.opacity(0.2), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 120)
+                    
+                    Spacer()
+                }
+                
+                // User info overlay
+                VStack {
+                    HStack {
+                        // User avatar and info
+                        HStack(spacing: 12) {
+                            AsyncImage(url: URL(string: group.userAvatarUrl ?? "")) { image in
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } placeholder: {
+                                Circle()
+                                    .fill(Color.gray.opacity(0.3))
+                                    .overlay(
+                                        Image(systemName: "person.fill")
+                                            .font(.title3)
+                                            .foregroundColor(.gray)
+                                    )
+                            }
+                            .frame(width: 40, height: 40)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 2))
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.userDisplayName ?? "Anonymous")
+                                    .font(.headline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                    .shadow(radius: 2)
+                                
+                                HStack(spacing: 4) {
+                                    Text("@\(group.userUsername ?? "user")")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                    
+                                    Text("•")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                    
+                                    Text(timeAgoString(from: selectedCapture.createdAt))
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        // Streak indicator
+                        HStack(spacing: 4) {
+                            Image(systemName: "flame.fill")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                            
+                            Text("\(group.currentStreak)")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.3))
+                        .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    
+                    Spacer()
+                }
+                
+                // Previous Captures Preview Overlay - Bottom
+                if !otherCaptures.isEmpty {
+                    VStack {
+                        Spacer()
+                        
+                        HStack {
+                            Spacer()
+                            
+                            HStack(spacing: 4) {
+                                ForEach(Array(otherCaptures.enumerated()), id: \.element.id) { index, capture in
+                                    Button(action: {
+                                        onCaptureSelect(capture.id)
+                                    }) {
+                                        AsyncImage(url: URL(string: capture.imageUrl ?? "")) { image in
+                                            image
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Rectangle()
+                                                .fill(Color.gray.opacity(0.3))
+                                        }
+                                        .frame(width: thumbnailSize(for: index), height: thumbnailSize(for: index))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                        )
+                                    }
+                                }
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 16)
+                        }
+                    }
+                }
             }
             
-            // Actions
-            HStack(spacing: 20) {
-                Button(action: {
-                    Task {
-                        await socialManager.toggleLike(postId: item.post.id)
-                    }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: item.isLiked ? "heart.fill" : "heart")
-                            .foregroundColor(item.isLiked ? .red : .primary)
-                        Text("\(item.post.likes)")
+            // Habit Info - Below Image
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(group.habitName)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    if let captures = group.recentCaptures, captures.count > 1 {
+                        Text("\(captures.count) captures")
                             .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
                 
-                Button(action: { showingComments = true }) {
-                    HStack(spacing: 4) {
+                // Reaction Stats
+                if selectedCapture.reactionCount > 0 {
+                    HStack(spacing: 8) {
+                        // Reaction avatars
+                        HStack(spacing: -8) {
+                            ForEach(Array(selectedCapture.reactionUsers.prefix(4).enumerated()), id: \.element.id) { index, user in
+                                AsyncImage(url: URL(string: user.avatarUrl ?? "")) { image in
+                                    image
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                } placeholder: {
+                                    Circle()
+                                        .fill(Color.gray.opacity(0.3))
+                                        .overlay(
+                                            Image(systemName: "person.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                        )
+                                }
+                                .frame(width: 24, height: 24)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Color.white, lineWidth: 1))
+                                .zIndex(Double(4 - index))
+                            }
+                        }
+                        
+                        Text("\(selectedCapture.reactionCount) reacted")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                }
+                
+                // Action Buttons - centered with icons only
+                HStack(spacing: 60) {
+                    Button(action: {
+                        Task {
+                            await onReactionToggle(selectedCapture.id)
+                        }
+                    }) {
+                        Image(systemName: selectedCapture.isLikedByCurrentUser ? "flame.fill" : "flame")
+                            .font(.title2)
+                            .foregroundColor(selectedCapture.isLikedByCurrentUser ? .orange : .primary)
+                    }
+                    
+                    Button(action: {
+                        onCommentTap(selectedCapture)
+                    }) {
                         Image(systemName: "message")
-                        Text("\(item.post.comments)")
-                            .font(.caption)
+                            .font(.title2)
+                            .foregroundColor(.primary)
                     }
                 }
-                
-                Button(action: { showingShare = true }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share")
-                            .font(.caption)
-                    }
-                }
-                
-                Spacer()
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .padding(.bottom, 16)
             }
-            .foregroundColor(.primary)
         }
-        .padding()
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-        .sheet(isPresented: $showingComments) {
-            CommentsView(post: item.post)
-        }
-        .sheet(isPresented: $showingShare) {
-            ShareSheet(items: [item.post.content])
-        }
     }
     
-    private func habitColor(for colorName: String?) -> Color {
-        switch colorName?.lowercased() {
-        case "red": return .red
-        case "orange": return .orange
-        case "blue": return .blue
-        case "green": return .green
-        case "purple": return .purple
-        case "pink": return .pink
-        case "cyan": return .cyan
-        case "gray": return .gray
-        default: return .blue
+    private func thumbnailSize(for index: Int) -> CGFloat {
+        // Reverse sizing: oldest (rightmost) is smallest, newest (leftmost) is largest
+        switch index {
+        case 0: return 32 // Smallest - oldest remaining
+        case 1: return 36 // Small
+        case 2: return 40 // Medium
+        case 3: return 44 // Large
+        default: return 48 // Largest - newest remaining
         }
     }
     
@@ -369,179 +455,74 @@ struct SocialPostCard: View {
     }
 }
 
-// MARK: - Create Post View
+// MARK: - Social Feed Category Badge
 
-struct CreatePostView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var socialManager: SocialManager
-    @EnvironmentObject var habitManager: HabitManager
-    @State private var content = ""
-    @State private var selectedHabit: Habit?
-    @State private var selectedImage: UIImage?
-    @State private var showingImagePicker = false
-    @State private var showingHabitPicker = false
-    @State private var isPosting = false
+struct SocialFeedCategoryBadge: View {
+    let category: String
+    let color: String?
+    
+    private var categoryData: (emoji: String, color: Color) {
+        switch category.lowercased() {
+        case "fitness":
+            return ("💪", CaptureTheme.Palette.fitness)
+        case "wellness":
+            return ("🧘", CaptureTheme.Palette.wellness)
+        case "learning":
+            return ("📚", CaptureTheme.Palette.learning)
+        case "nutrition":
+            return ("🥗", CaptureTheme.Palette.nutrition)
+        case "productivity":
+            return ("⚡", CaptureTheme.Palette.productivity)
+        case "health":
+            return ("🏥", CaptureTheme.Palette.health)
+        case "social":
+            return ("🤝", CaptureTheme.Palette.social)
+        default:
+            return ("🎯", .gray)
+        }
+    }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Content Input
-                VStack(spacing: 16) {
-                    TextField("What's on your mind?", text: $content, axis: .vertical)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .lineLimit(5...10)
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(12)
-                        .onSubmit {
-                            self.hideKeyboard()
-                        }
-                    
-                    // Selected Habit
-                    if let habit = selectedHabit {
-                        HStack {
-                            Text(habit.icon ?? "⭐️")
-                                .font(.title2)
-                                .frame(width: 32, height: 32)
-                                .background(habitColor(for: habit.color))
-                                .clipShape(Circle())
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(habit.name)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text(habit.category)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Spacer()
-                            
-                            Button("Remove") {
-                                selectedHabit = nil
-                            }
-                            .font(.caption)
-                            .foregroundColor(.red)
-                        }
-                        .padding()
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    
-                    // Selected Image
-                    if let image = selectedImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(
-                                Button("Remove") {
-                                    selectedImage = nil
-                                }
-                                .font(.caption)
-                                .foregroundColor(.white)
-                                .padding(8)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(8)
-                                .padding(8),
-                                alignment: .topTrailing
-                            )
-                    }
-                    
-                    Spacer()
-                }
-                .padding()
-                
-                // Action Buttons
-                HStack(spacing: 16) {
-                    Button(action: { showingHabitPicker = true }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus.circle")
-                            Text("Add Habit")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                    }
-                    
-                    Button(action: { showingImagePicker = true }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "camera.aperture")
-                            Text("Add Photo")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                    }
-                    
-                    Spacer()
-                }
-                .padding()
-            }
-            .navigationTitle("Create Post")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Post") {
-                        Task {
-                            await createPost()
-                        }
-                    }
-                    .disabled(content.isEmpty || isPosting)
-                }
-            }
-            .sheet(isPresented: $showingHabitPicker) {
-                HabitPickerView(selectedHabit: $selectedHabit)
-            }
-            .sheet(isPresented: $showingImagePicker) {
-                ImagePickerCropper(selectedImage: $selectedImage)
-            }
+        HStack(spacing: 4) {
+            Text(categoryData.emoji)
+                .font(.caption)
+            
+            Text(category)
+                .font(.caption)
+                .fontWeight(.medium)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(categoryData.color.opacity(0.2))
+        .foregroundColor(categoryData.color)
+        .cornerRadius(8)
     }
-    
-    private func createPost() async {
-        isPosting = true
-        
-        var imageUrl: String?
-        if let image = selectedImage {
-            // Upload image and get URL
-            // imageUrl = await uploadImage(image)
-        }
-        
-        await socialManager.createPost(
-            content: content,
-            habitId: selectedHabit?.id,
-            imageUrl: imageUrl
-        )
-        
-        isPosting = false
-        dismiss()
-    }
-    
-    private func habitColor(for colorName: String?) -> Color {
-        switch colorName?.lowercased() {
-        case "red": return .red
-        case "orange": return .orange
-        case "blue": return .blue
-        case "green": return .green
-        case "purple": return .purple
-        case "pink": return .pink
-        case "cyan": return .cyan
-        case "gray": return .gray
-        default: return .blue
+}
+
+// MARK: - Social Groups Tab View
+
+struct SocialGroupsTabView: View {
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                SocialFeedEmptyStateView(
+                    icon: "person.3",
+                    title: "Groups coming soon",
+                    subtitle: "Track habits with friends in groups!"
+                )
+            }
+            .padding(.horizontal)
+            .padding(.top, 16)
         }
     }
 }
 
-// MARK: - Comments View
+// MARK: - Capture Comments View
 
-struct CommentsView: View {
-    let post: SocialPost
-    @EnvironmentObject var socialManager: SocialManager
+struct CaptureCommentsView: View {
+    let capture: SocialFeedCapture
     @Environment(\.dismiss) private var dismiss
-    @State private var comments: [Comment] = []
+    @State private var comments: [CaptureComment] = []
     @State private var newComment = ""
     @State private var isLoading = false
     
@@ -555,12 +536,12 @@ struct CommentsView: View {
                             ProgressView()
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .padding(.top, 100)
-                        } else if comments.isEmpty {
-                            EmptyStateView(
-                                icon: "message",
-                                title: "No comments yet",
-                                subtitle: "Be the first to comment!"
-                            )
+                                        } else if comments.isEmpty {
+                    SocialFeedEmptyStateView(
+                        icon: "message",
+                        title: "No comments yet",
+                        subtitle: "Be the first to comment!"
+                    )
                         } else {
                             ForEach(comments) { comment in
                                 CommentCard(comment: comment)
@@ -606,21 +587,29 @@ struct CommentsView: View {
     
     private func loadComments() async {
         isLoading = true
-        comments = await socialManager.loadComments(postId: post.id)
+        do {
+            comments = try await SupabaseManager.shared.getCaptureComments(captureId: capture.id)
+        } catch {
+            print("Error loading comments: \(error)")
+        }
         isLoading = false
     }
     
     private func addComment() async {
-        await socialManager.addComment(postId: post.id, content: newComment)
-        newComment = ""
-        await loadComments()
+        do {
+            _ = try await SupabaseManager.shared.addCaptureComment(captureId: capture.id, content: newComment)
+            newComment = ""
+            await loadComments()
+        } catch {
+            print("Error adding comment: \(error)")
+        }
     }
 }
 
-// MARK: - Supporting Views
+// MARK: - Comment Card
 
 struct CommentCard: View {
-    let comment: Comment
+    let comment: CaptureComment
     @State private var user: User?
     
     var body: some View {
@@ -671,28 +660,58 @@ struct CommentCard: View {
     }
 }
 
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
+// MARK: - Supporting Views
+
+struct SocialFeedEmptyStateView: View {
+    let icon: String
+    let title: String
+    let subtitle: String
     
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 48))
+                .foregroundColor(.gray)
+            
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color(.systemGray6))
+        .cornerRadius(16)
     }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
-
-
 
 // MARK: - Extensions
 
-extension SocialManager {
-    var currentUserId: UUID? {
-        // Return current user ID from auth manager
-        return nil
+extension ImagePreloader {
+    func preloadSocialFeedImages(for groups: [SocialFeedGroup]) async {
+        for group in groups {
+            // Preload main capture image
+            if let imageUrl = group.lastCaptureImageUrl {
+                _ = await preloadImage(url: imageUrl)
+            }
+            
+            // Preload recent capture images
+            if let recentCaptures = group.recentCaptures {
+                for capture in recentCaptures {
+                    if let imageUrl = capture.imageUrl {
+                        _ = await preloadImage(url: imageUrl)
+                    }
+                }
+            }
+        }
     }
 }
-
-// MARK: - Utility Functions
 
 extension View {
     func hideKeyboard() {

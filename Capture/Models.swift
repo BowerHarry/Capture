@@ -852,3 +852,173 @@ struct TrendingCapture: Identifiable, Codable {
         trendScore = try container.decode(Double.self, forKey: .trendScore)
     }
 }
+
+// MARK: - Social Feed Models
+
+struct CaptureReaction: Identifiable, Codable {
+    let id: UUID
+    let captureId: UUID
+    let userId: UUID
+    let reactionType: String // "fire", "heart", etc.
+    let createdAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case captureId = "capture_id"
+        case userId = "user_id"
+        case reactionType = "reaction_type"
+        case createdAt = "created_at"
+    }
+    
+    init(id: UUID = UUID(), captureId: UUID, userId: UUID, reactionType: String = "fire", createdAt: Date = Date()) {
+        self.id = id
+        self.captureId = captureId
+        self.userId = userId
+        self.reactionType = reactionType
+        self.createdAt = createdAt
+    }
+}
+
+struct CaptureComment: Identifiable, Codable {
+    let id: UUID
+    let captureId: UUID
+    let userId: UUID
+    let content: String
+    let createdAt: Date
+    let updatedAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case captureId = "capture_id"
+        case userId = "user_id"
+        case content
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+    
+    init(id: UUID = UUID(), captureId: UUID, userId: UUID, content: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.captureId = captureId
+        self.userId = userId
+        self.content = content
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+struct SocialFeedGroup: Identifiable, Codable {
+    let id: String // Composite key: "user_id-habit_template_id"
+    let userId: UUID
+    let habitTemplateId: UUID
+    let habitName: String
+    let habitCategory: String
+    let habitCategoryColor: String?
+    let userDisplayName: String?
+    let userAvatarUrl: String?
+    let userUsername: String?
+    let currentStreak: Int
+    let lastCaptureId: UUID
+    let lastCaptureImageUrl: String?
+    let lastCaptureCreatedAt: Date
+    let totalCaptures: Int
+    var reactionCount: Int
+    let commentCount: Int
+    var isLikedByCurrentUser: Bool
+    var recentCaptures: [SocialFeedCapture]?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case habitTemplateId = "habit_template_id"
+        case habitName = "habit_name"
+        case habitCategory = "habit_category"
+        case habitCategoryColor = "habit_category_color"
+        case userDisplayName = "user_display_name"
+        case userAvatarUrl = "user_avatar_url"
+        case userUsername = "user_username"
+        case currentStreak = "current_streak"
+        case lastCaptureId = "last_capture_id"
+        case lastCaptureImageUrl = "last_capture_image_url"
+        case lastCaptureCreatedAt = "last_capture_created_at"
+        case totalCaptures = "total_captures"
+        case reactionCount = "reaction_count"
+        case commentCount = "comment_count"
+        case isLikedByCurrentUser = "is_liked_by_current_user"
+        case recentCaptures = "recent_captures"
+    }
+    
+    init(id: String, userId: UUID, habitTemplateId: UUID, habitName: String, habitCategory: String, habitCategoryColor: String?, userDisplayName: String?, userAvatarUrl: String?, userUsername: String?, currentStreak: Int, lastCaptureId: UUID, lastCaptureImageUrl: String?, lastCaptureCreatedAt: Date, totalCaptures: Int, reactionCount: Int, commentCount: Int, isLikedByCurrentUser: Bool, recentCaptures: [SocialFeedCapture]?) {
+        self.id = id
+        self.userId = userId
+        self.habitTemplateId = habitTemplateId
+        self.habitName = habitName
+        self.habitCategory = habitCategory
+        self.habitCategoryColor = habitCategoryColor
+        self.userDisplayName = userDisplayName
+        self.userAvatarUrl = userAvatarUrl
+        self.userUsername = userUsername
+        self.currentStreak = currentStreak
+        self.lastCaptureId = lastCaptureId
+        self.lastCaptureImageUrl = lastCaptureImageUrl
+        self.lastCaptureCreatedAt = lastCaptureCreatedAt
+        self.totalCaptures = totalCaptures
+        self.reactionCount = reactionCount
+        self.commentCount = commentCount
+        self.isLikedByCurrentUser = isLikedByCurrentUser
+        self.recentCaptures = recentCaptures
+    }
+}
+
+struct SocialFeedCapture: Identifiable, Codable {
+    let id: UUID
+    let imageUrl: String?
+    let caption: String?
+    let createdAt: Date
+    var reactionCount: Int
+    let commentCount: Int
+    var isLikedByCurrentUser: Bool
+    let reactionUsers: [SocialFeedReactionUser]
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case imageUrl = "image_url"
+        case caption
+        case createdAt = "created_at"
+        case reactionCount = "reaction_count"
+        case commentCount = "comment_count"
+        case isLikedByCurrentUser = "is_liked_by_current_user"
+        case reactionUsers = "reaction_users"
+    }
+    
+    init(id: UUID, imageUrl: String?, caption: String?, createdAt: Date, reactionCount: Int, commentCount: Int, isLikedByCurrentUser: Bool, reactionUsers: [SocialFeedReactionUser]) {
+        self.id = id
+        self.imageUrl = imageUrl
+        self.caption = caption
+        self.createdAt = createdAt
+        self.reactionCount = reactionCount
+        self.commentCount = commentCount
+        self.isLikedByCurrentUser = isLikedByCurrentUser
+        self.reactionUsers = reactionUsers
+    }
+}
+
+struct SocialFeedReactionUser: Identifiable, Codable {
+    let id: UUID
+    let displayName: String?
+    let avatarUrl: String?
+    let username: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case username
+    }
+    
+    init(id: UUID, displayName: String?, avatarUrl: String?, username: String?) {
+        self.id = id
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+        self.username = username
+    }
+}

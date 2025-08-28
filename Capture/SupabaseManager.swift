@@ -1846,4 +1846,181 @@ struct AnyEncodable: Encodable {
             return CommunityStats(activeUsers: 0, totalHabits: 0, totalCaptures: 0)
         }
     }
+    
+    // MARK: - Social Feed Functions
+    
+    func getSocialFeedGroups(limit: Int = 20, offset: Int = 0) async throws -> [SocialFeedGroup] {
+        NSLog("[SupabaseManager] getSocialFeedGroups: fetching social feed groups with limit=%d, offset=%d", limit, offset)
+        
+        do {
+            NSLog("[SupabaseManager] getSocialFeedGroups: calling RPC function...")
+            
+            // First, let's test with the simple test function
+            NSLog("[SupabaseManager] getSocialFeedGroups: testing with simple function first...")
+            let testGroups: [SocialFeedGroup] = try await client.database
+                .rpc("test_social_feed_structure")
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getSocialFeedGroups: test function returned %d groups", testGroups.count)
+            
+            // Now try the real function
+            NSLog("[SupabaseManager] getSocialFeedGroups: calling real RPC function...")
+            let groups: [SocialFeedGroup] = try await client.database
+                .rpc("get_social_feed_groups", params: [
+                    "limit_param": limit,
+                    "offset_param": offset
+                ])
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getSocialFeedGroups: successfully fetched %d social feed groups", groups.count)
+            for (index, group) in groups.enumerated() {
+                            NSLog("[SupabaseManager] getSocialFeedGroups: group %d - id: %@, habit: %@, user: %@, captures: %d, lastImageUrl: %@", 
+                  index, group.id, group.habitName, group.userDisplayName ?? "Unknown", group.recentCaptures?.count ?? 0, group.lastCaptureImageUrl ?? "nil")
+            }
+            return groups
+        } catch {
+            NSLog("[SupabaseManager] getSocialFeedGroups: error %@", error.localizedDescription)
+            NSLog("[SupabaseManager] getSocialFeedGroups: error details - %@", String(describing: error))
+            throw error
+        }
+    }
+    
+    func toggleCaptureReaction(captureId: UUID) async throws -> (isLiked: Bool, reactionCount: Int) {
+        NSLog("[SupabaseManager] toggleCaptureReaction: toggling reaction for capture ID '%@'", captureId.uuidString)
+        
+        // First test the simple function
+        do {
+            let testResult: Any = try await client.database
+                .rpc("test_reaction_function")
+                .execute()
+                .value
+            NSLog("[SupabaseManager] toggleCaptureReaction: test function result: %@", String(describing: testResult))
+        } catch {
+            NSLog("[SupabaseManager] toggleCaptureReaction: test function failed: %@", String(describing: error))
+        }
+        
+        // Try direct table operations instead of RPC
+        do {
+            let currentUserId = try await client.auth.session.user.id
+            
+            // First check if user already reacted
+            let existingReactions: [CaptureReaction] = try await client.database
+                .from("capture_reactions")
+                .select()
+                .eq("capture_id", value: captureId)
+                .eq("user_id", value: currentUserId)
+                .execute()
+                .value
+            
+            let alreadyReacted = !existingReactions.isEmpty
+            
+            if alreadyReacted {
+                // Remove existing reaction
+                try await client.database
+                    .from("capture_reactions")
+                    .delete()
+                    .eq("capture_id", value: captureId)
+                    .eq("user_id", value: currentUserId)
+                    .execute()
+                
+                NSLog("[SupabaseManager] toggleCaptureReaction: removed reaction")
+            } else {
+                // Add new reaction
+                try await client.database
+                    .from("capture_reactions")
+                    .insert([
+                        "capture_id": captureId.uuidString,
+                        "user_id": currentUserId.uuidString,
+                        "reaction_type": "fire"
+                    ])
+                    .execute()
+                
+                NSLog("[SupabaseManager] toggleCaptureReaction: added reaction")
+            }
+            
+            // Get updated reaction count
+            let allReactions: [CaptureReaction] = try await client.database
+                .from("capture_reactions")
+                .select()
+                .eq("capture_id", value: captureId)
+                .execute()
+                .value
+            
+            let reactionCount = allReactions.count
+            let isLiked = !alreadyReacted // If we just added, then it's liked
+            
+            NSLog("[SupabaseManager] toggleCaptureReaction: successfully toggled reaction - isLiked: %@, reactionCount: %d", String(isLiked), reactionCount)
+            return (isLiked: isLiked, reactionCount: reactionCount)
+            
+        } catch {
+            NSLog("[SupabaseManager] toggleCaptureReaction: error %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    func getCaptureComments(captureId: UUID) async throws -> [CaptureComment] {
+        NSLog("[SupabaseManager] getCaptureComments: fetching comments for capture ID '%@'", captureId.uuidString)
+        
+        do {
+            let comments: [CaptureComment] = try await client.database
+                .from("capture_comments")
+                .select()
+                .eq("capture_id", value: captureId)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getCaptureComments: successfully fetched %d comments", comments.count)
+            return comments
+        } catch {
+            NSLog("[SupabaseManager] getCaptureComments: error %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    func addCaptureComment(captureId: UUID, content: String) async throws -> CaptureComment {
+        NSLog("[SupabaseManager] addCaptureComment: adding comment to capture ID '%@'", captureId.uuidString)
+        
+        do {
+            let comment: [CaptureComment] = try await client.database
+                .from("capture_comments")
+                .insert([
+                    "capture_id": captureId.uuidString,
+                    "content": content
+                ])
+                .select()
+                .limit(1)
+                .execute()
+                .value
+            
+            if let newComment = comment.first {
+                NSLog("[SupabaseManager] addCaptureComment: successfully added comment with ID '%@'", newComment.id.uuidString)
+                return newComment
+            } else {
+                throw NSError(domain: "APIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create comment"])
+            }
+        } catch {
+            NSLog("[SupabaseManager] addCaptureComment: error %@", error.localizedDescription)
+            throw error
+        }
+    }
+    
+    func getCaptureReactions(captureId: UUID) async throws -> [SocialFeedReactionUser] {
+        NSLog("[SupabaseManager] getCaptureReactions: fetching reactions for capture ID '%@'", captureId.uuidString)
+        
+        do {
+            let reactions: [SocialFeedReactionUser] = try await client.database
+                .rpc("get_capture_reactions", params: ["capture_id_param": captureId])
+                .execute()
+                .value
+            
+            NSLog("[SupabaseManager] getCaptureReactions: successfully fetched %d reactions", reactions.count)
+            return reactions
+        } catch {
+            NSLog("[SupabaseManager] getCaptureReactions: error %@", error.localizedDescription)
+            throw error
+        }
+    }
 }
