@@ -75,8 +75,12 @@ class ImagePreloader: ObservableObject {
         
         cacheMisses += 1
         
-        // Check if already loading
-        if loadingTasks[normalizedURL] != nil {
+        // Check if already loading with proper synchronization
+        let isAlreadyLoading = await lockQueue.sync {
+            loadingTasks[normalizedURL] != nil
+        }
+        
+        if isAlreadyLoading {
             print("🖼️ Image already loading: \(normalizedURL)")
             // Don't wait, just return nil to avoid race conditions
             return nil
@@ -88,7 +92,11 @@ class ImagePreloader: ObservableObject {
         let task = Task {
             await loadImage(url: imageURL, key: normalizedURL)
         }
-        loadingTasks[normalizedURL] = task
+        
+        // Add task to loadingTasks with proper synchronization
+        await lockQueue.sync {
+            loadingTasks[normalizedURL] = task
+        }
         
         // Don't wait for completion, just return nil
         // The image will be available in cache when it's ready
@@ -153,8 +161,12 @@ class ImagePreloader: ObservableObject {
         let normalizedURL = normalizeURL(url)
         guard let imageURL = URL(string: normalizedURL) else { return }
         
-        // Only preload if not already cached or loading
-        if cache.object(forKey: normalizedURL as NSString) == nil && loadingTasks[normalizedURL] == nil {
+        // Only preload if not already cached or loading with proper synchronization
+        let shouldPreload = await lockQueue.sync {
+            cache.object(forKey: normalizedURL as NSString) == nil && loadingTasks[normalizedURL] == nil
+        }
+        
+        if shouldPreload {
             Task {
                 await loadImage(url: imageURL, key: normalizedURL)
             }
@@ -197,16 +209,24 @@ class ImagePreloader: ObservableObject {
             if let image = UIImage(data: data) {
                 await MainActor.run {
                     self.cache.setObject(image, forKey: key as NSString)
-                    self.loadingTasks.removeValue(forKey: key)
-                    print("✅ Successfully cached image: \(key)")
                 }
+                // Remove task from loadingTasks with proper synchronization
+                await lockQueue.sync {
+                    self.loadingTasks.removeValue(forKey: key)
+                }
+                print("✅ Successfully cached image: \(key)")
             } else {
                 print("❌ Failed to create UIImage from data: \(key)")
+                // Remove task from loadingTasks with proper synchronization
+                await lockQueue.sync {
+                    self.loadingTasks.removeValue(forKey: key)
+                }
             }
         } catch {
-            await MainActor.run {
+            print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
+            // Remove task from loadingTasks with proper synchronization
+            await lockQueue.sync {
                 self.loadingTasks.removeValue(forKey: key)
-                print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
             }
         }
     }
@@ -242,8 +262,13 @@ class ImagePreloader: ObservableObject {
         imageCache.removeAll()
         avatarCache.removeAll()
         trendingThumbnailCache.removeAll()
-        loadingTasks.values.forEach { $0.cancel() }
-        loadingTasks.removeAll()
+        
+        // Cancel and clear loading tasks with proper synchronization
+        lockQueue.sync {
+            loadingTasks.values.forEach { $0.cancel() }
+            loadingTasks.removeAll()
+        }
+        
         trendingThumbnailLoadingTasks.values.forEach { $0.cancel() }
         trendingThumbnailLoadingTasks.removeAll()
         trendingThumbnailCompletions.removeAll()

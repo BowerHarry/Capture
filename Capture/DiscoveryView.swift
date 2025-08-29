@@ -60,11 +60,11 @@ struct DiscoveryView: View {
                                 },
                                 onSwitchToHomeTab: onSwitchToHomeTab,
                                 selectedCategoryId: $selectedCategoryId
-                            )
+                            ).padding(.bottom, 60)
                             
                             // Bottom spacer for navigation bar
-                            Spacer()
-                                .frame(height: 100)
+//                            Spacer()
+//                                .frame(height: 100)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
@@ -77,11 +77,11 @@ struct DiscoveryView: View {
                     // Habits Tab
                     ScrollView {
                         LazyVStack(spacing: 24) {
-                            HabitsTabContent(habits: filteredHabits)
+                            HabitsTabContent(habits: filteredHabits).padding(.bottom, 60)
                             
                             // Bottom spacer for navigation bar
-                            Spacer()
-                                .frame(height: 100)
+//                            Spacer()
+//                                .frame(height: 100)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
@@ -94,11 +94,11 @@ struct DiscoveryView: View {
                     // Users Tab
                     ScrollView {
                         LazyVStack(spacing: 24) {
-                            UsersTabContent(users: filteredUsers, searchQuery: searchQuery)
+                            UsersTabContent(users: filteredUsers, searchQuery: searchQuery).padding(.bottom, 60)
                             
                             // Bottom spacer for navigation bar
-                            Spacer()
-                                .frame(height: 100)
+//                            Spacer()
+//                                .frame(height: 100)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 16)

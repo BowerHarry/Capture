@@ -7,10 +7,13 @@ struct SocialFeedView: View {
     @State private var selectedTab = 0
     @State private var feedGroups: [SocialFeedGroup] = []
     @State private var isLoading = false
+    @State private var isLoadingMore = false
     @State private var selectedCaptures: [String: UUID] = [:] // groupId -> selected captureId
     @State private var showingComments = false
     @State private var selectedCaptureForComments: SocialFeedCapture?
     @State private var refreshTrigger = false
+    @State private var loadedPostCount = 0
+    @State private var allPosts: [SocialFeedGroup] = []
     
     var body: some View {
         NavigationView {
@@ -40,6 +43,8 @@ struct SocialFeedView: View {
                     SocialFeedTabView(
                         feedGroups: feedGroups,
                         isLoading: isLoading,
+                        allPosts: allPosts,
+                        loadedPostCount: loadedPostCount,
                         selectedCaptures: $selectedCaptures,
                         onReactionToggle: handleReactionToggle,
                         onCommentTap: handleCommentTap
@@ -75,28 +80,54 @@ struct SocialFeedView: View {
     
     private func loadSocialFeed() async {
         isLoading = true
+        loadedPostCount = 0
+        feedGroups = []
+        
         do {
             // Try cache first
             if let cachedGroups = AppCacheManager.shared.getCachedSocialFeedGroups() {
-                feedGroups = cachedGroups
+                allPosts = cachedGroups
                 print("📱 Loaded social feed from cache")
-                
-                // Preload images in background
-                Task {
-                    await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: cachedGroups), priority: .normal)
-                }
+                await loadPostsIncrementally(from: cachedGroups)
             } else {
                 // Load from network
-                feedGroups = try await SupabaseManager.shared.getSocialFeedGroups()
-                AppCacheManager.shared.cacheSocialFeedGroups(feedGroups)
-                
-                // Preload images with high priority for visible content
-                await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: feedGroups), priority: .high)
+                allPosts = try await SupabaseManager.shared.getSocialFeedGroups()
+                AppCacheManager.shared.cacheSocialFeedGroups(allPosts)
+                await loadPostsIncrementally(from: allPosts)
             }
         } catch {
             print("Error loading social feed: \(error)")
         }
         isLoading = false
+    }
+    
+    private func loadPostsIncrementally(from posts: [SocialFeedGroup]) async {
+        guard !posts.isEmpty else { return }
+        
+        // Load first post immediately
+        feedGroups = [posts[0]]
+        loadedPostCount = 1
+        print("📱 Loaded first post immediately")
+        
+        // Preload images for first post with high priority
+        if let firstPost = posts.first {
+            await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: [firstPost]), priority: .high)
+        }
+        
+        // Load remaining posts one by one with small delays
+        for i in 1..<posts.count {
+            // Small delay to allow UI to update
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            
+            feedGroups.append(posts[i])
+            loadedPostCount = i + 1
+            print("📱 Loaded post \(i + 1) of \(posts.count)")
+            
+            // Preload images for this post
+            await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: [posts[i]]), priority: .normal)
+        }
+        
+        print("📱 Finished loading all \(posts.count) posts")
     }
     
     private func getImageURLs(from groups: [SocialFeedGroup]) -> [String] {
@@ -170,6 +201,8 @@ struct SocialFeedView: View {
 struct SocialFeedTabView: View {
     let feedGroups: [SocialFeedGroup]
     let isLoading: Bool
+    let allPosts: [SocialFeedGroup]
+    let loadedPostCount: Int
     @Binding var selectedCaptures: [String: UUID]
     let onReactionToggle: (UUID) async -> Void
     let onCommentTap: (SocialFeedCapture) -> Void
@@ -188,21 +221,32 @@ struct SocialFeedTabView: View {
                         subtitle: "Complete some habits or follow friends to see their progress here!"
                     )
                 } else {
+                    // Show loaded posts
                     ForEach(feedGroups) { group in
                         SocialFeedGroupCard(
                             group: group,
                             selectedCaptureId: selectedCaptures[group.id],
                             onCaptureSelect: { captureId in
+                                print("🔄 Tapping thumbnail: group.id=\(group.id), captureId=\(captureId)")
                                 selectedCaptures[group.id] = captureId
+                                print("🔄 Updated selectedCaptures: \(selectedCaptures)")
                             },
                             onReactionToggle: onReactionToggle,
                             onCommentTap: onCommentTap
                         )
                     }
+                    
+                    // Show loading indicators for posts that are still loading
+                    if loadedPostCount < allPosts.count {
+                        ForEach(0..<(allPosts.count - loadedPostCount), id: \.self) { index in
+                            SocialFeedLoadingCard()
+                        }
+                    }
                 }
             }
             .padding(.horizontal)
             .padding(.top, 16)
+            .padding(.bottom, 60) // Add bottom padding for social feed
         }
     }
 }
@@ -216,11 +260,20 @@ struct SocialFeedGroupCard: View {
     let onReactionToggle: (UUID) async -> Void
     let onCommentTap: (SocialFeedCapture) -> Void
     
+    // Force view updates when selection changes
+    @State private var viewUpdateTrigger = 0
+    
     private var selectedCapture: SocialFeedCapture {
+        print("🔍 selectedCapture computed: selectedCaptureId=\(String(describing: selectedCaptureId)), group.id=\(group.id)")
+        
         if let selectedId = selectedCaptureId,
            let capture = group.recentCaptures?.first(where: { $0.id == selectedId }) {
+            print("🔍 Found selected capture: \(capture.id)")
+            print("🔍 Selected capture imageUrl: \(capture.imageUrl ?? "nil")")
             return capture
         }
+        
+        print("🔍 Using fallback capture")
         // If no recent captures or no selection, use the last capture data from the group
         let fallbackCapture = SocialFeedCapture(
             id: group.lastCaptureId,
@@ -233,9 +286,9 @@ struct SocialFeedGroupCard: View {
             reactionUsers: []
         )
         
-
-        
-        return group.recentCaptures?.first ?? fallbackCapture
+        let result = group.recentCaptures?.first ?? fallbackCapture
+        print("🔍 Final selectedCapture imageUrl: \(result.imageUrl ?? "nil")")
+        return result
     }
     
     private var otherCaptures: [SocialFeedCapture] {
@@ -247,7 +300,7 @@ struct SocialFeedGroupCard: View {
             // Main Capture Image with Overlaid Header - Phone camera aspect ratio (9:16)
             ZStack(alignment: .top) {
                 // Main image
-                AsyncImage(url: URL(string: selectedCapture.imageUrl ?? "")) { image in
+                PreloadableAsyncImage(url: selectedCapture.imageUrl) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -258,6 +311,14 @@ struct SocialFeedGroupCard: View {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                         )
+                }
+                .id(viewUpdateTrigger) // Force view update when selection changes
+                .onAppear {
+                    print("🖼️ Main image onAppear - URL: \(selectedCapture.imageUrl ?? "nil")")
+                }
+                .onChange(of: selectedCaptureId) { _ in
+                    viewUpdateTrigger += 1
+                    print("🔄 View update triggered for selection change")
                 }
                 .frame(height: 400) // 9:16 aspect ratio
                 .clipped()
@@ -291,7 +352,7 @@ struct SocialFeedGroupCard: View {
                     HStack {
                         // User avatar and info
                         HStack(spacing: 12) {
-                            AsyncImage(url: URL(string: group.userAvatarUrl ?? "")) { image in
+                            PreloadableAsyncImage(url: group.userAvatarUrl) { image in
                                 image
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -364,11 +425,11 @@ struct SocialFeedGroupCard: View {
                             Spacer()
                             
                             HStack(spacing: 4) {
-                                ForEach(Array(otherCaptures.enumerated()), id: \.element.id) { index, capture in
+                                ForEach(otherCaptures, id: \.id) { capture in
                                     Button(action: {
                                         onCaptureSelect(capture.id)
                                     }) {
-                                        AsyncImage(url: URL(string: capture.imageUrl ?? "")) { image in
+                                        PreloadableAsyncImage(url: capture.imageUrl) { image in
                                             image
                                                 .resizable()
                                                 .aspectRatio(contentMode: .fill)
@@ -376,7 +437,7 @@ struct SocialFeedGroupCard: View {
                                             Rectangle()
                                                 .fill(Color.gray.opacity(0.3))
                                         }
-                                        .frame(width: thumbnailSize(for: index), height: thumbnailSize(for: index))
+                                        .frame(width: 40, height: 40)
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 4)
@@ -415,8 +476,8 @@ struct SocialFeedGroupCard: View {
                     HStack(spacing: 8) {
                         // Reaction avatars
                         HStack(spacing: -8) {
-                            ForEach(Array(selectedCapture.reactionUsers.prefix(4).enumerated()), id: \.element.id) { index, user in
-                                AsyncImage(url: URL(string: user.avatarUrl ?? "")) { image in
+                            ForEach(Array(selectedCapture.reactionUsers.prefix(4).enumerated()), id: \.offset) { index, user in
+                                PreloadableAsyncImage(url: user.avatarUrl) { image in
                                     image
                                         .resizable()
                                         .aspectRatio(contentMode: .fill)
@@ -473,16 +534,7 @@ struct SocialFeedGroupCard: View {
         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
     }
     
-    private func thumbnailSize(for index: Int) -> CGFloat {
-        // Reverse sizing: oldest (rightmost) is smallest, newest (leftmost) is largest
-        switch index {
-        case 0: return 32 // Smallest - oldest remaining
-        case 1: return 36 // Small
-        case 2: return 40 // Medium
-        case 3: return 44 // Large
-        default: return 48 // Largest - newest remaining
-        }
-    }
+
     
     private func timeAgoString(from date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
@@ -650,7 +702,7 @@ struct CommentCard: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            AsyncImage(url: URL(string: user?.avatar ?? "")) { image in
+            PreloadableAsyncImage(url: user?.avatar) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -693,6 +745,70 @@ struct CommentCard: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+// MARK: - Loading Card
+
+struct SocialFeedLoadingCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Loading placeholder for main image
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(height: 400)
+                .overlay(
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle())
+                )
+            
+            // Loading placeholder for content
+            VStack(alignment: .leading, spacing: 12) {
+                // User info placeholder
+                HStack {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 40, height: 40)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 120, height: 16)
+                            .cornerRadius(4)
+                        
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 80, height: 12)
+                            .cornerRadius(4)
+                    }
+                    
+                    Spacer()
+                }
+                
+                // Habit info placeholder
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 100, height: 20)
+                    .cornerRadius(4)
+                
+                // Action buttons placeholder
+                HStack(spacing: 60) {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 24, height: 24)
+                    
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 24, height: 24)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
     }
 }
 
