@@ -4,11 +4,16 @@ struct ContentView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var habitManager: HabitManager
     @StateObject private var imagePreloader = ImagePreloader.shared
+    @StateObject private var cacheManager = AppCacheManager.shared
     
     var body: some View {
         Group {
             if authManager.isAuthenticated {
-                MainTabView()
+                if cacheManager.isInitializing {
+                    LoadingView()
+                } else {
+                    MainTabView()
+                }
             } else {
                 AuthView()
             }
@@ -16,21 +21,94 @@ struct ContentView: View {
         .onAppear {
             if authManager.isAuthenticated {
                 Task { 
-                    await habitManager.loadAppData()
+                    // Load high priority data first (habits)
+                    await loadHabitsWithCache()
+                    await loadHabitCategoriesWithCache()
                     
-                    // Start preloading trending thumbnails immediately after app data is loaded
-                    let trendingURLs = habitManager.trendingCaptures.compactMap { $0.imageUrl }
-                    if !trendingURLs.isEmpty {
-                        imagePreloader.preloadTrendingThumbnails(for: trendingURLs, size: CGSize(width: 64, height: 64))
-                    }
+                    // Start background preloading
+                    cacheManager.startBackgroundPreloading()
+                    
+                    // Preload images for current habits
+                    imagePreloader.preloadHabitCaptures(habitManager.captures)
                 }
             }
         }
         .onChange(of: authManager.isAuthenticated) { isAuthed in
             if isAuthed {
-                Task { await habitManager.loadAppData() }
+                Task { 
+                    await loadHabitsWithCache()
+                    await loadHabitCategoriesWithCache()
+                }
             }
         }
+    }
+}
+
+struct LoadingView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .scaleEffect(1.5)
+            
+            Text("Loading your habits...")
+                .font(.headline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - Cache Loading Helpers
+
+extension ContentView {
+    private func loadHabitsWithCache() async {
+        // Try cache first
+        if let cachedHabits = cacheManager.getCachedHabits() {
+            habitManager.habits = cachedHabits
+            print("📱 Loaded habits from cache")
+            
+            // Load captures in background
+            Task {
+                await loadCapturesWithCache()
+            }
+            return
+        }
+        
+        // Load from network if cache miss
+        await habitManager.loadHabits()
+        
+        // Cache the result
+        cacheManager.cacheHabits(habitManager.habits)
+    }
+    
+    private func loadCapturesWithCache() async {
+        if let cachedCaptures = cacheManager.getCachedCaptures() {
+            habitManager.captures = cachedCaptures
+            print("📱 Loaded captures from cache")
+            return
+        }
+        
+        // Load from network
+        do {
+            let captures = try await SupabaseManager.shared.getCapturesSince(since: Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date())
+            habitManager.captures = captures
+            cacheManager.cacheCaptures(captures)
+        } catch {
+            print("❌ Failed to load captures: \(error)")
+        }
+    }
+    
+    private func loadHabitCategoriesWithCache() async {
+        if let cachedCategories = cacheManager.getCachedHabitCategories() {
+            habitManager.habitCategories = cachedCategories
+            habitManager.categories = cachedCategories.map { DiscoveryHabitCategory(from: $0) }
+            print("📱 Loaded habit categories from cache")
+            return
+        }
+        
+        await habitManager.loadHabitCategories()
+        cacheManager.cacheHabitCategories(habitManager.habitCategories)
     }
 }
 

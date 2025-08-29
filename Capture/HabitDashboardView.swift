@@ -159,24 +159,24 @@ struct HabitDashboardView: View {
                 UserDefaults.standard.set(newValue, forKey: "greetingCollapsed")
             }
             .task { 
-                await habitManager.loadHabits()
-                await habitManager.loadHabitCategories()
+                await loadHabitsWithCache()
+                await loadHabitCategoriesWithCache()
                 // Preload habit capture images after habits are loaded
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
             .onChange(of: authManager.isAuthenticated) { isAuthed in
                 if isAuthed { 
                     Task { 
-                        await habitManager.loadHabits()
-                        await habitManager.loadHabitCategories()
+                        await loadHabitsWithCache()
+                        await loadHabitCategoriesWithCache()
                         // Preload habit capture images after habits are loaded
                         imagePreloader.preloadHabitCaptures(habitManager.captures)
                     } 
                 }
             }
             .refreshable { 
-                await habitManager.loadHabits()
-                await habitManager.loadHabitCategories()
+                await loadHabitsWithCache()
+                await loadHabitCategoriesWithCache()
                 // Preload habit capture images after habits are loaded
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
@@ -1074,5 +1074,36 @@ struct EmptyHabitsView: View {
         .cornerRadius(20)
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(CaptureTheme.Palette.border, lineWidth: 1))
         .padding(.horizontal)
+    }
+}
+
+// MARK: - Cache Loading Helpers
+
+extension HabitDashboardView {
+    private func loadHabitsWithCache() async {
+        // Try cache first
+        if let cachedHabits = AppCacheManager.shared.getCachedHabits() {
+            habitManager.habits = cachedHabits
+            print("📱 Loaded habits from cache")
+            return
+        }
+        
+        // Load from network if cache miss
+        await habitManager.loadHabits()
+        
+        // Cache the result
+        AppCacheManager.shared.cacheHabits(habitManager.habits)
+    }
+    
+    private func loadHabitCategoriesWithCache() async {
+        if let cachedCategories = AppCacheManager.shared.getCachedHabitCategories() {
+            habitManager.habitCategories = cachedCategories
+            habitManager.categories = cachedCategories.map { DiscoveryHabitCategory(from: $0) }
+            print("📱 Loaded habit categories from cache")
+            return
+        }
+        
+        await habitManager.loadHabitCategories()
+        AppCacheManager.shared.cacheHabitCategories(habitManager.habitCategories)
     }
 }
