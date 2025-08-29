@@ -189,6 +189,62 @@ class SupabaseManager {
             throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
         
+        // Try optimized function first
+        do {
+            let habits = try await getHabitsOptimized(userId: currentUser.id)
+            NSLog("[SupabaseManager] getHabits: successfully fetched %d habits using optimized function", habits.count)
+            return habits
+        } catch {
+            NSLog("[SupabaseManager] getHabits: optimized function failed, falling back to original: %@", error.localizedDescription)
+            return try await getHabitsLegacy(currentUser: currentUser)
+        }
+    }
+    
+    private func getHabitsOptimized(userId: UUID) async throws -> [Habit] {
+        let sixMonthsAgo = Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let sinceStr = iso.string(from: sixMonthsAgo)
+        
+        // Get habits with progress using optimized function
+        let habitData: [HabitProgressData] = try await client.rpc("get_user_habits_with_progress", params: [
+            "user_id_param": userId.uuidString,
+            "since_date": sinceStr
+        ]).execute().value
+        
+        // Get captures with metadata using optimized function
+        let captureData: [CaptureMetadataData] = try await client.rpc("get_captures_with_metadata", params: [
+            "user_id_param": userId.uuidString,
+            "since_date": sinceStr
+        ]).execute().value
+        
+        // Convert to Habit objects
+        var habits: [Habit] = []
+        for habitInfo in habitData {
+            let habit = Habit(
+                id: habitInfo.habit_id,
+                name: habitInfo.habit_name,
+                icon: nil,
+                color: nil,
+                category: habitInfo.habit_category,
+                target: habitInfo.target_count,
+                targetFrequency: habitInfo.target_frequency,
+                targetCount: habitInfo.target_count,
+                currentStreak: habitInfo.current_streak,
+                longestStreak: 0, // Will be computed later
+                isActive: true,
+                createdAt: Date(),
+                updatedAt: Date(),
+                userId: userId
+            )
+            habits.append(habit)
+        }
+        
+        return habits
+    }
+    
+    private func getHabitsLegacy(currentUser: User) async throws -> [Habit] {
+        
 
         
         do {
@@ -1849,42 +1905,17 @@ struct AnyEncodable: Encodable {
     
     // MARK: - Social Feed Functions
     
-    func getSocialFeedGroups(limit: Int = 20, offset: Int = 0) async throws -> [SocialFeedGroup] {
+    func getSocialFeedGroups(limit: Int = 10, offset: Int = 0) async throws -> [SocialFeedGroup] {
         NSLog("[SupabaseManager] getSocialFeedGroups: fetching social feed groups with limit=%d, offset=%d", limit, offset)
         
-        do {
-            NSLog("[SupabaseManager] getSocialFeedGroups: calling RPC function...")
-            
-            // First, let's test with the simple test function
-            NSLog("[SupabaseManager] getSocialFeedGroups: testing with simple function first...")
-            let testGroups: [SocialFeedGroup] = try await client.database
-                .rpc("test_social_feed_structure")
-                .execute()
-                .value
-            
-            NSLog("[SupabaseManager] getSocialFeedGroups: test function returned %d groups", testGroups.count)
-            
-            // Now try the real function
-            NSLog("[SupabaseManager] getSocialFeedGroups: calling real RPC function...")
-            let groups: [SocialFeedGroup] = try await client.database
-                .rpc("get_social_feed_groups", params: [
-                    "limit_param": limit,
-                    "offset_param": offset
-                ])
-                .execute()
-                .value
-            
-            NSLog("[SupabaseManager] getSocialFeedGroups: successfully fetched %d social feed groups", groups.count)
-            for (index, group) in groups.enumerated() {
-                            NSLog("[SupabaseManager] getSocialFeedGroups: group %d - id: %@, habit: %@, user: %@, captures: %d, lastImageUrl: %@", 
-                  index, group.id, group.habitName, group.userDisplayName ?? "Unknown", group.recentCaptures?.count ?? 0, group.lastCaptureImageUrl ?? "nil")
-            }
-            return groups
-        } catch {
-            NSLog("[SupabaseManager] getSocialFeedGroups: error %@", error.localizedDescription)
-            NSLog("[SupabaseManager] getSocialFeedGroups: error details - %@", String(describing: error))
-            throw error
-        }
+        // Temporarily use fallback function until optimized function parameter types are fixed
+        let groups: [SocialFeedGroup] = try await client.rpc("get_social_feed_groups", params: [
+            "limit_param": limit,
+            "offset_param": offset
+        ]).execute().value
+        
+        NSLog("[SupabaseManager] getSocialFeedGroups: successfully fetched %d social feed groups", groups.count)
+        return groups
     }
     
     func toggleCaptureReaction(captureId: UUID) async throws -> (isLiked: Bool, reactionCount: Int) {

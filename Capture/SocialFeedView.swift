@@ -76,13 +76,49 @@ struct SocialFeedView: View {
     private func loadSocialFeed() async {
         isLoading = true
         do {
-            feedGroups = try await SupabaseManager.shared.getSocialFeedGroups()
-            // Preload images for the feed groups
-            await imagePreloader.preloadSocialFeedImages(for: feedGroups)
+            // Try cache first
+            if let cachedGroups = AppCacheManager.shared.getCachedSocialFeedGroups() {
+                feedGroups = cachedGroups
+                print("📱 Loaded social feed from cache")
+                
+                // Preload images in background
+                Task {
+                    await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: cachedGroups), priority: .normal)
+                }
+            } else {
+                // Load from network
+                feedGroups = try await SupabaseManager.shared.getSocialFeedGroups()
+                AppCacheManager.shared.cacheSocialFeedGroups(feedGroups)
+                
+                // Preload images with high priority for visible content
+                await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: feedGroups), priority: .high)
+            }
         } catch {
             print("Error loading social feed: \(error)")
         }
         isLoading = false
+    }
+    
+    private func getImageURLs(from groups: [SocialFeedGroup]) -> [String] {
+        var urls: [String] = []
+        
+        for group in groups {
+            // Add main capture image
+            if let imageUrl = group.lastCaptureImageUrl {
+                urls.append(imageUrl)
+            }
+            
+            // Add recent captures images
+            if let recentCaptures = group.recentCaptures {
+                for capture in recentCaptures {
+                    if let imageUrl = capture.imageUrl {
+                        urls.append(imageUrl)
+                    }
+                }
+            }
+        }
+        
+        return urls
     }
     
     private func refreshFeed() async {

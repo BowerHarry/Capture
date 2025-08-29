@@ -1022,3 +1022,29 @@ struct SocialFeedReactionUser: Identifiable, Codable {
         self.username = username
     }
 }
+
+// MARK: - Optimized Database Models
+
+struct HabitProgressData: Codable {
+    let habit_id: UUID
+    let habit_name: String
+    let habit_category: String
+    let target_frequency: String
+    let target_count: Int
+    let current_streak: Int
+    let total_captures: Int
+    let captures_since_date: Int
+    let last_capture_date: Date?
+    let habit_template_id: UUID
+}
+
+struct CaptureMetadataData: Codable {
+    let capture_id: UUID
+    let user_habit_id: UUID
+    let image_url: String?
+    let caption: String?
+    let created_at: Date
+    let is_public: Bool
+    let habit_name: String
+    let habit_category: String
+}
