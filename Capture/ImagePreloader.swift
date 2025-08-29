@@ -14,11 +14,24 @@ class ImagePreloader: ObservableObject {
     private var loadingTasks: [String: Task<Void, Never>] = [:]
     private let lockQueue = DispatchQueue(label: "imagePreloader.lock", attributes: .concurrent)
     
-    // MARK: - Trending Thumbnail Properties
+    // MARK: - Enhanced Caching Properties
     
     private var trendingThumbnailCache: [String: UIImage] = [:]
     private var trendingThumbnailLoadingTasks: [String: Task<Void, Never>] = [:]
     private var trendingThumbnailCompletions: [String: [(UIImage?) -> Void]] = [:]
+    
+    // MARK: - Performance Properties
+    
+    private var preloadQueue = DispatchQueue(label: "imagePreloader.preload", qos: .utility, attributes: .concurrent)
+    private var highPriorityQueue = DispatchQueue(label: "imagePreloader.highPriority", qos: .userInitiated)
+    private var backgroundQueue = DispatchQueue(label: "imagePreloader.background", qos: .background)
+    
+    // MARK: - Cache Statistics
+    
+    private var cacheHits = 0
+    private var cacheMisses = 0
+    private var totalLoadTime: TimeInterval = 0
+    private var loadCount = 0
     
     init() {
         // Configure cache
@@ -55,9 +68,12 @@ class ImagePreloader: ObservableObject {
         
         // Check if already cached
         if let cached = cache.object(forKey: normalizedURL as NSString) {
+            cacheHits += 1
             print("🖼️ Image already cached: \(normalizedURL)")
             return cached
         }
+        
+        cacheMisses += 1
         
         // Check if already loading
         if loadingTasks[normalizedURL] != nil {
@@ -68,7 +84,7 @@ class ImagePreloader: ObservableObject {
         
         print("🖼️ Starting to preload image: \(normalizedURL)")
         
-        // Start loading
+        // Start loading with appropriate priority
         let task = Task {
             await loadImage(url: imageURL, key: normalizedURL)
         }
@@ -77,6 +93,80 @@ class ImagePreloader: ObservableObject {
         // Don't wait for completion, just return nil
         // The image will be available in cache when it's ready
         return nil
+    }
+    
+    // MARK: - High Priority Image Loading
+    
+    func preloadImageHighPriority(url: String) async -> UIImage? {
+        guard !url.isEmpty else { return nil }
+        
+        let normalizedURL = normalizeURL(url)
+        
+        guard let imageURL = URL(string: normalizedURL) else {
+            print("❌ Invalid URL format: \(url)")
+            return nil
+        }
+        
+        // Check cache first
+        if let cached = cache.object(forKey: normalizedURL as NSString) {
+            cacheHits += 1
+            return cached
+        }
+        
+        cacheMisses += 1
+        
+        // Load immediately for high priority
+        return await loadImageSync(url: imageURL, key: normalizedURL)
+    }
+    
+    // MARK: - Batch Preloading
+    
+    func preloadImagesBatch(urls: [String], priority: PreloadPriority = .normal) async {
+        let batchSize = 5 // Process in batches to avoid overwhelming the network
+        
+        for batch in urls.chunked(into: batchSize) {
+            await withTaskGroup(of: Void.self) { group in
+                for url in batch {
+                    group.addTask {
+                        switch priority {
+                        case .high:
+                            _ = await self.preloadImageHighPriority(url: url)
+                        case .normal:
+                            _ = await self.preloadImage(url: url)
+                        case .low:
+                            await self.preloadImageBackground(url: url)
+                        }
+                    }
+                }
+            }
+            
+            // Small delay between batches
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+    }
+    
+    // MARK: - Background Preloading
+    
+    func preloadImageBackground(url: String) async {
+        guard !url.isEmpty else { return }
+        
+        let normalizedURL = normalizeURL(url)
+        guard let imageURL = URL(string: normalizedURL) else { return }
+        
+        // Only preload if not already cached or loading
+        if cache.object(forKey: normalizedURL as NSString) == nil && loadingTasks[normalizedURL] == nil {
+            Task {
+                await loadImage(url: imageURL, key: normalizedURL)
+            }
+        }
+    }
+    
+    // MARK: - Preload Priority
+    
+    enum PreloadPriority {
+        case high
+        case normal
+        case low
     }
     
     private func normalizeURL(_ urlString: String) -> String {
@@ -121,6 +211,24 @@ class ImagePreloader: ObservableObject {
         }
     }
     
+    private func loadImageSync(url: URL, key: String) async -> UIImage? {
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let image = UIImage(data: data) {
+                await MainActor.run {
+                    self.cache.setObject(image, forKey: key as NSString)
+                }
+                return image
+            } else {
+                print("❌ Failed to create UIImage from data: \(key)")
+                return nil
+            }
+        } catch {
+            print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
     // MARK: - Get Cached Image
     
     func getCachedImage(for url: String) -> UIImage? {
@@ -131,8 +239,39 @@ class ImagePreloader: ObservableObject {
     
     func clearCache() {
         cache.removeAllObjects()
+        imageCache.removeAll()
+        avatarCache.removeAll()
+        trendingThumbnailCache.removeAll()
         loadingTasks.values.forEach { $0.cancel() }
         loadingTasks.removeAll()
+        trendingThumbnailLoadingTasks.values.forEach { $0.cancel() }
+        trendingThumbnailLoadingTasks.removeAll()
+        trendingThumbnailCompletions.removeAll()
+        print("🗑️ Image cache cleared")
+    }
+    
+    // MARK: - Performance Monitoring
+    
+    func getPerformanceStats() -> [String: Any] {
+        let hitRate = loadCount > 0 ? Double(cacheHits) / Double(loadCount) * 100 : 0
+        let avgLoadTime = loadCount > 0 ? totalLoadTime / Double(loadCount) : 0
+        
+        return [
+            "cache_hits": cacheHits,
+            "cache_misses": cacheMisses,
+            "total_loads": loadCount,
+            "hit_rate_percent": hitRate,
+            "avg_load_time_seconds": avgLoadTime,
+            "cache_size": cache.totalCostLimit,
+            "cached_images": cache.countLimit
+        ]
+    }
+    
+    func resetPerformanceStats() {
+        cacheHits = 0
+        cacheMisses = 0
+        totalLoadTime = 0
+        loadCount = 0
     }
     
     // MARK: - Preload Specific Image Types
@@ -574,6 +713,16 @@ struct PreloadableHabitCaptureView: View {
                         .font(.system(size: 20))
                         .foregroundColor(.gray)
                 )
+        }
+    }
+}
+
+// MARK: - Extensions
+
+extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0 ..< Swift.min($0 + size, count)])
         }
     }
 }
