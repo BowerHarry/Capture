@@ -11,7 +11,6 @@ class AuthManager: ObservableObject {
     @Published var errorMessage: String?
     
     private let supabaseClient = SupabaseManager.shared
-    private var cancellables = Set<AnyCancellable>()
     
     private init() {
         checkExistingSession()
@@ -28,7 +27,7 @@ class AuthManager: ObservableObject {
                     await HabitManager.shared.loadHabits()
                 }
             } catch {
-                print("Session check failed: \(error)")
+                Log.error("Session check failed: \(error)")
             }
             isLoading = false
         }
@@ -74,7 +73,7 @@ class AuthManager: ObservableObject {
             self.isAuthenticated = false
             self.currentUser = nil
         } catch {
-            print("Sign out failed: \(error)")
+            Log.error("Sign out failed: \(error)")
         }
     }
     
@@ -107,11 +106,10 @@ class AuthManager: ObservableObject {
         if DemoMode.isEnabled { return }
         #endif
         guard let currentUser = currentUser else { 
-            print("❌ No current user to refresh follower counts")
+            Log.error("❌ No current user to refresh follower counts")
             return 
         }
         
-        print("🔄 Refreshing follower counts for user: \(currentUser.id)")
         
         do {
             // Get followers count
@@ -130,7 +128,6 @@ class AuthManager: ObservableObject {
                 .execute()
                 .value
             
-            print("📊 Found \(followersResponse.count) followers and \(followingResponse.count) following")
             
             // Update current user with new counts
             let updatedUser = User(
@@ -146,10 +143,9 @@ class AuthManager: ObservableObject {
                 bestStreak: currentUser.bestStreak
             )
             
-            print("✅ Updated user with \(updatedUser.followersCount ?? 0) followers and \(updatedUser.followingCount ?? 0) following")
             self.currentUser = updatedUser
         } catch {
-            print("❌ Failed to refresh follower counts: \(error)")
+            Log.error("❌ Failed to refresh follower counts: \(error)")
         }
     }
     
@@ -157,7 +153,6 @@ class AuthManager: ObservableObject {
         #if DEBUG
         if DemoMode.isEnabled { return }
         #endif
-        print("🔄 Refreshing follower counts for specific user: \(userId)")
         
         do {
             // Get followers count for the specific user
@@ -176,7 +171,6 @@ class AuthManager: ObservableObject {
                 .execute()
                 .value
             
-            print("📊 User \(userId) has \(followersResponse.count) followers and \(followingResponse.count) following")
             
             // If this is the current user, update the current user object
             if let currentUser = currentUser, currentUser.id == userId {
@@ -193,11 +187,10 @@ class AuthManager: ObservableObject {
                     bestStreak: currentUser.bestStreak
                 )
                 
-                print("✅ Updated current user with new counts")
                 self.currentUser = updatedUser
             }
         } catch {
-            print("❌ Failed to refresh follower counts for user \(userId): \(error)")
+            Log.error("❌ Failed to refresh follower counts for user \(userId): \(error)")
         }
     }
 }

@@ -141,14 +141,13 @@ class ImagePreloader: ObservableObject {
         // Normalize URL - add scheme if missing
         let normalizedURL = normalizeURL(url)
         guard let imageURL = URL(string: normalizedURL) else {
-            print("❌ Invalid URL format: \(url)")
+            Log.error("❌ Invalid URL format: \(url)")
             return nil
         }
         
         // Check if already cached
         if let cached = cache.object(forKey: normalizedURL as NSString) {
             cacheHits += 1
-            print("🖼️ Image already cached: \(normalizedURL)")
             return cached
         }
         
@@ -158,12 +157,10 @@ class ImagePreloader: ObservableObject {
         let isAlreadyLoading = await state.getLoadingTask(for: normalizedURL) != nil
         
         if isAlreadyLoading {
-            print("🖼️ Image already loading: \(normalizedURL)")
             // Don't wait, just return nil to avoid race conditions
             return nil
         }
         
-        print("🖼️ Starting to preload image: \(normalizedURL)")
         
         // Start loading with appropriate priority
         let task = Task {
@@ -186,7 +183,7 @@ class ImagePreloader: ObservableObject {
         let normalizedURL = normalizeURL(url)
         
         guard let imageURL = URL(string: normalizedURL) else {
-            print("❌ Invalid URL format: \(url)")
+            Log.error("❌ Invalid URL format: \(url)")
             return nil
         }
         
@@ -257,25 +254,7 @@ class ImagePreloader: ObservableObject {
     }
     
     private func normalizeURL(_ urlString: String) -> String {
-        // If URL already has a scheme, return as is
-        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
-            return urlString
-        }
-        
-        // If it looks like a Supabase storage URL (contains /storage/), add https://
-        if urlString.contains("/storage/") {
-            return "https://" + urlString
-        }
-        
-        // If it looks like a relative path or filename, it might be a Supabase storage path
-        // Add the Supabase storage base URL
-        if !urlString.contains("://") && !urlString.hasPrefix("/") {
-            // This looks like a relative path, add the Supabase storage base URL
-            return "https://your-project-ref.supabase.co/storage/v1/object/public/captures/" + urlString
-        }
-        
-        // Default to adding https://
-        return "https://" + urlString
+        SupabaseConfig.normalizedImageURL(urlString, bucket: "captures")
     }
     
     private func loadImage(url: URL, key: String) async {
@@ -287,14 +266,13 @@ class ImagePreloader: ObservableObject {
                 }
                 // Remove task from loadingTasks with proper synchronization
                 await state.removeLoadingTask(for: key)
-                print("✅ Successfully cached image: \(key)")
             } else {
-                print("❌ Failed to create UIImage from data: \(key)")
+                Log.error("❌ Failed to create UIImage from data: \(key)")
                 // Remove task from loadingTasks with proper synchronization
                 await state.removeLoadingTask(for: key)
             }
         } catch {
-            print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
+            Log.error("❌ Failed to load image: \(key) - \(error.localizedDescription)")
             // Remove task from loadingTasks with proper synchronization
             await state.removeLoadingTask(for: key)
         }
@@ -309,11 +287,11 @@ class ImagePreloader: ObservableObject {
                 }
                 return image
             } else {
-                print("❌ Failed to create UIImage from data: \(key)")
+                Log.error("❌ Failed to create UIImage from data: \(key)")
                 return nil
             }
         } catch {
-            print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
+            Log.error("❌ Failed to load image: \(key) - \(error.localizedDescription)")
             return nil
         }
     }
@@ -337,32 +315,10 @@ class ImagePreloader: ObservableObject {
             await state.clearAllTrendingThumbnailCompletions()
         }
         
-        print("🗑️ Image cache cleared")
     }
     
-    // MARK: - Performance Monitoring
     
-    func getPerformanceStats() -> [String: Any] {
-        let hitRate = loadCount > 0 ? Double(cacheHits) / Double(loadCount) * 100 : 0
-        let avgLoadTime = loadCount > 0 ? totalLoadTime / Double(loadCount) : 0
-        
-        return [
-            "cache_hits": cacheHits,
-            "cache_misses": cacheMisses,
-            "total_loads": loadCount,
-            "hit_rate_percent": hitRate,
-            "avg_load_time_seconds": avgLoadTime,
-            "cache_size": cache.totalCostLimit,
-            "cached_images": cache.countLimit
-        ]
-    }
     
-    func resetPerformanceStats() {
-        cacheHits = 0
-        cacheMisses = 0
-        totalLoadTime = 0
-        loadCount = 0
-    }
     
     // MARK: - Preload Specific Image Types
     
@@ -376,13 +332,6 @@ class ImagePreloader: ObservableObject {
         // The actual implementation should be called with captures from HabitManager
     }
     
-    func preloadCaptures(_ captures: [Capture]) {
-        // Preload recent capture images
-        let captureURLs = captures.compactMap { capture in
-            capture.imageUrl
-        }.filter { !$0.isEmpty }
-        preloadImages(for: captureURLs)
-    }
     
     func preloadHabitCaptures(_ captures: [HabitCapture]) {
         // Preload recent habit capture images
@@ -392,10 +341,6 @@ class ImagePreloader: ObservableObject {
         preloadImages(for: captureURLs)
     }
     
-    func preloadSocialFeedImages(for posts: [SocialPost]) {
-        let imageURLs = posts.compactMap { $0.imageUrl }.filter { !$0.isEmpty }
-        preloadImages(for: imageURLs)
-    }
 }
 
 // MARK: - Trending Thumbnail Methods
@@ -420,18 +365,15 @@ extension ImagePreloader {
         
         // Check cache first
         if let cached = getCachedTrendingThumbnail(for: normalizedURL) {
-            NSLog("[ImagePreloader] getTrendingThumbnail: found cached thumbnail for %@", normalizedURL)
             return cached
         }
         
         // Check if already loading - use actor to prevent race conditions
         if await state.getTrendingThumbnailLoadingTask(for: normalizedURL) != nil {
-            NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
             // Return nil immediately - don't wait to prevent blocking
             return nil
         }
         
-        NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
         
         // Start loading
         let task = Task {
@@ -455,7 +397,6 @@ extension ImagePreloader {
         
         // Check cache first
         if let cached = getCachedTrendingThumbnail(for: normalizedURL) {
-            NSLog("[ImagePreloader] getTrendingThumbnail: found cached thumbnail for %@", normalizedURL)
             completion(cached)
             return
         }
@@ -464,13 +405,11 @@ extension ImagePreloader {
         Task {
             // Check if already loading
             if await state.getTrendingThumbnailLoadingTask(for: normalizedURL) != nil {
-                NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
                 // Store completion callback to be called when loading finishes
                 await state.addTrendingThumbnailCompletion(completion, for: normalizedURL)
                 return
             }
             
-            NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
             
             // Store completion callback
             await state.addTrendingThumbnailCompletion(completion, for: normalizedURL)
@@ -483,12 +422,6 @@ extension ImagePreloader {
         }
     }
     
-    // Check if trending thumbnail is cached (synchronous)
-    func isTrendingThumbnailCached(for url: String) -> Bool {
-        guard !url.isEmpty else { return false }
-        let normalizedURL = normalizeTrendingURL(url)
-        return getCachedTrendingThumbnail(for: normalizedURL) != nil
-    }
     
     // Get cached trending thumbnail only (synchronous)
     func getCachedTrendingThumbnailOnly(for url: String) -> UIImage? {
@@ -518,31 +451,17 @@ extension ImagePreloader {
         }
     }
     
-    private func waitForTrendingThumbnailLoad(_ url: String) async {
-        // Poll for up to 5 seconds (100 attempts * 50ms)
-        for _ in 0..<100 {
-            if getCachedTrendingThumbnail(for: url) != nil {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
-        }
-    }
     
     private func loadTrendingThumbnail(url: String, size: CGSize) async {
         guard let imageURL = URL(string: url) else {
-            NSLog("[ImagePreloader] loadTrendingThumbnail: invalid URL %@", url)
             return
         }
         
         do {
-            let (data, response) = try await URLSession.shared.data(from: imageURL)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                NSLog("[ImagePreloader] loadTrendingThumbnail: HTTP %d for %@", httpResponse.statusCode, url)
-            }
+            let (data, _) = try await URLSession.shared.data(from: imageURL)
             
             guard let originalImage = UIImage(data: data) else {
-                NSLog("[ImagePreloader] loadTrendingThumbnail: failed to create image from data for %@", url)
+                Log.error(String(format: "[ImagePreloader] loadTrendingThumbnail: failed to create image from data for %@", url))
                 return
             }
             
@@ -560,10 +479,9 @@ extension ImagePreloader {
             await state.clearTrendingThumbnailCompletions(for: url) // Clear completions after calling
             completions.forEach { $0(thumbnail) }
             
-            NSLog("[ImagePreloader] loadTrendingThumbnail: successfully cached thumbnail for %@", url)
             
         } catch {
-            NSLog("[ImagePreloader] loadTrendingThumbnail: error loading %@: %@", url, error.localizedDescription)
+            Log.error(String(format: "[ImagePreloader] loadTrendingThumbnail: error loading %@: %@", url, error.localizedDescription))
             
             // Clean up loading task
             await state.removeTrendingThumbnailLoadingTask(for: url)
@@ -588,35 +506,9 @@ extension ImagePreloader {
     }
     
     private func normalizeTrendingURL(_ urlString: String) -> String {
-        // If URL already has a scheme, return as is
-        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
-            return urlString
-        }
-        
-        // If it looks like a Supabase storage URL (contains /storage/), add https://
-        if urlString.contains("/storage/") {
-            return "https://" + urlString
-        }
-        
-        // If it looks like a relative path or filename, it might be a Supabase storage path
-        // Add the Supabase storage base URL for captures_public bucket
-        if !urlString.contains("://") && !urlString.hasPrefix("/") {
-            // This looks like a relative path, add the Supabase storage base URL for captures_public
-            return "https://your-project-ref.supabase.co/storage/v1/object/public/captures_public/" + urlString
-        }
-        
-        // Default to adding https://
-        return "https://" + urlString
+        SupabaseConfig.normalizedImageURL(urlString, bucket: "captures_public")
     }
     
-    // Clear trending thumbnail cache
-    func clearTrendingThumbnailCache() {
-        Task {
-            await state.clearAllCaches()
-            await state.clearAllTrendingThumbnailLoadingTasks()
-            await state.clearAllTrendingThumbnailCompletions()
-        }
-    }
 }
 
 // MARK: - Preloadable AsyncImage
@@ -676,25 +568,7 @@ struct PreloadableAsyncImage<Content: View, Placeholder: View>: View {
 
     
     private func normalizeURL(_ urlString: String) -> String {
-        // If URL already has a scheme, return as is
-        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
-            return urlString
-        }
-        
-        // If it looks like a Supabase storage URL (contains /storage/), add https://
-        if urlString.contains("/storage/") {
-            return "https://" + urlString
-        }
-        
-        // If it looks like a relative path or filename, it might be a Supabase storage path
-        // Add the Supabase storage base URL
-        if !urlString.contains("://") && !urlString.hasPrefix("/") {
-            // This looks like a relative path, add the Supabase storage base URL
-            return "https://your-project-ref.supabase.co/storage/v1/object/public/captures/" + urlString
-        }
-        
-        // Default to adding https://
-        return "https://" + urlString
+        SupabaseConfig.normalizedImageURL(urlString, bucket: "captures")
     }
     
     private func pollForCachedImage(_ url: String) async {
@@ -710,8 +584,6 @@ struct PreloadableAsyncImage<Content: View, Placeholder: View>: View {
         }
     }
 }
-
-
 
 // MARK: - Preloadable Avatar View
 
@@ -772,36 +644,6 @@ struct PreloadableAvatarView: View {
     }
 }
 
-// MARK: - Preloadable Habit Capture View
-
-struct PreloadableHabitCaptureView: View {
-    let captureURL: String?
-    let size: CGSize
-    
-    init(captureURL: String?, size: CGSize = CGSize(width: 64, height: 64)) {
-        self.captureURL = captureURL
-        self.size = size
-    }
-    
-    var body: some View {
-        PreloadableAsyncImage(url: captureURL) { image in
-            image
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: size.width, height: size.height)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        } placeholder: {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: size.width, height: size.height)
-                .overlay(
-                    Image(systemName: "photo")
-                        .font(.system(size: 20))
-                        .foregroundColor(.gray)
-                )
-        }
-    }
-}
 
 // MARK: - Extensions
 
