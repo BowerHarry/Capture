@@ -4,6 +4,8 @@ A habit tracker for iOS where you complete a habit by taking a photo of it, with
 
 **Status:** Archived, kept for reference. Development stopped in August 2025 and the Supabase backend it talked to no longer exists, so the app now only runs in an offline demo mode (see [Running it](#running-it)).
 
+Built as an AI-driven mockup, drafted with AI coding agents, to see whether the idea held up. It was abandoned before the code had a thorough review, so read it as a prototype rather than reviewed work.
+
 <p align="center">
   <img src="docs/images/home.jpg" width="24%" alt="Home tab: streak totals, this week's progress and a list of habits">
   <img src="docs/images/feed.jpg" width="24%" alt="Feed tab: another user's habit card with recent captures and reactions">
@@ -35,8 +37,6 @@ Most habit trackers are a checkbox, which is easy to tick without doing the thin
 - **Per-type response caching.** `AppCacheManager` stores habits, captures, categories and the feed with separate expiry times (five minutes for the feed up to a day for categories) so tabs open with data already present.
 
 **Stack:** Swift, SwiftUI, AVFoundation, Supabase (Auth, Postgres, Storage) via [supabase-swift](https://github.com/supabase/supabase-swift).
-
-Built as an AI-driven mockup, drafted with AI coding agents, to see whether the idea held up. It was abandoned before the code had a thorough review, so read it as a prototype rather than reviewed work.
 
 ---
 
