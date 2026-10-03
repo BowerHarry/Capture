@@ -32,9 +32,11 @@ Most habit trackers are a checkbox, which is easy to tick without doing the thin
 - **Habits are shared templates, not per-user rows.** The data model separates `habit_templates` from `user_habits`, so that everyone doing "Morning Run" points at the same template. That is what makes trending and discovery possible.
 - **Trending is calculated in Postgres.** A view and an RPC function rank habits using the last seven days of captures, participants and likes, so the app fetches a ready-made list.
 - **A custom image pipeline.** `ImagePreloader` keeps a size-limited in-memory cache, uses an actor to de-duplicate in-flight downloads, and generates small thumbnails for the trending grid.
-- **Per-type response caching.** `AppCacheManager` stores habits, captures, the feed and discovery data with separate expiry times (five minutes for the feed up to a day for categories) so tabs open with data already present.
+- **Per-type response caching.** `AppCacheManager` stores habits, captures, categories and the feed with separate expiry times (five minutes for the feed up to a day for categories) so tabs open with data already present.
 
 **Stack:** Swift, SwiftUI, AVFoundation, Supabase (Auth, Postgres, Storage) via [supabase-swift](https://github.com/supabase/supabase-swift).
+
+Drafted with AI coding agents. The project was abandoned before the code had a thorough review, so read it as a prototype rather than reviewed work.
 
 ---
 
@@ -77,32 +79,36 @@ Demo mode is read-only. Anything that writes (saving a capture, following someon
 
 This is untested since the original project was lost. You would need to:
 
-1. Create a Supabase project and put its URL and anon key in `Capture/SupabaseManager.swift`. The project URL is also hard-coded in `HabitManager.swift` and `ImagePreloader.swift`.
-2. Recreate the schema. The `.sql` files in the repository root cover the storage buckets, row-level security policies and the trending view and function, but they were written iteratively and are not a complete, ordered migration. `Capture/Models.swift` and `APP_FUNCTIONALITY_OVERVIEW.md` describe the tables the app expects.
+1. Create a Supabase project.
+2. Copy `Capture/Supabase.example.plist` to `Capture/Supabase.plist` (git-ignored) and fill in the project URL and anon key.
+3. Run `supabase/schema.sql` against the project. It was consolidated from the original iterative scripts and has never been run. The base tables were only ever created in the Supabase dashboard, so they are reconstructed from the app's models and marked `RECONSTRUCTED` in the file. Expect to fix things, and read the `NOTE:` comments first.
 
 ## Project structure
 
 ```
 Capture/
-  CaptureApp 2.swift        App entry point
+  CaptureApp.swift          App entry point
   ContentView.swift         Auth gate, tab container and custom tab bar
-  SupabaseManager.swift     All backend calls: auth, tables, RPC, storage
+  SupabaseManager.swift     Backend client; the calls are in SupabaseManager+*.swift,
+                            split into Auth, Habits, Captures, Discovery and Social
+  SupabaseConfig.swift      Reads the project URL and key from Supabase.plist
   AuthManager.swift         Session state
   HabitManager.swift        Habits, captures, streak and completion logic
-  SocialManager.swift       Follows, plus an older posts/likes implementation
+  SocialManager.swift       Follows and follower lists
   AppCacheManager.swift     Response cache with per-type expiry
   ImagePreloader.swift      Image cache, preloading and thumbnails
   Models.swift              Codable models
   Theme.swift               Colours and shared styling
+  Log.swift                 Error logging wrapper
   *View.swift               One file per screen
   CameraManager.swift       AVFoundation capture session
   Demo/DemoMode.swift       Debug-only demo mode and fixtures
-*.sql                       Supabase setup scripts
+supabase/schema.sql         Consolidated database schema (untested)
 figma/                      React prototype of the same app, exported from Figma Make, and its spec
 docs/images/                README screenshots
 ```
 
-The three manager classes are singletons injected as environment objects. Views read their published state, and every network call goes through `SupabaseManager`, which is where demo mode swaps in fixtures.
+The three manager classes are singletons injected as environment objects. Views read their published state, and almost every network call goes through `SupabaseManager`, which is where demo mode swaps in fixtures. The exceptions are the follow, profile and habit-template queries in `SocialManager`, `AuthManager`, `HabitManager` and `UserProfileView`, which use the client directly and are not covered by demo mode.
 
 ## Tests
 
@@ -110,14 +116,17 @@ There are none.
 
 ## Known limitations
 
-- The backend no longer exists, so only demo mode works.
+- The backend no longer exists, so only demo mode works, and the replacement schema is untested.
 - The Groups tab in the feed and most of the Achievements tab are "coming soon" placeholders.
-- Deleting a habit and per-habit stats are stubs in `HabitManager`.
-- `SocialManager` still contains an earlier posts, likes and comments implementation alongside the capture-based feed that the UI uses.
-- On feed cards, the category badge sits behind the streak badge and is hard to read.
+- There is no way to delete a habit.
 - The camera tab needs a physical device, as the simulator has no camera.
+- The camera code was reworked after the backend was lost and has only been compiled, not run on a device.
 
 ## Credits
 
 - [supabase-swift](https://github.com/supabase/supabase-swift) for the backend client.
 - The prototype in `figma/` was generated with Figma Make and includes [shadcn/ui](https://ui.shadcn.com/) components (MIT) and Unsplash photo references. See `figma/Attributions.md`.
+
+## License
+
+[MIT](LICENSE)
