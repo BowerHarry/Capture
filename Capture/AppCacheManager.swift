@@ -25,10 +25,7 @@ class AppCacheManager: ObservableObject {
         static let habits: TimeInterval = 3600 // 1 hour
         static let captures: TimeInterval = 1800 // 30 minutes
         static let habitCategories: TimeInterval = 86400 // 24 hours
-        static let trendingHabits: TimeInterval = 1800 // 30 minutes
-        static let communityStats: TimeInterval = 3600 // 1 hour
         static let socialFeedGroups: TimeInterval = 300 // 5 minutes
-        static let userProfile: TimeInterval = 3600 // 1 hour
     }
     
     // MARK: - Properties
@@ -230,53 +227,5 @@ class AppCacheManager: ObservableObject {
             Log.error("❌ Failed to decode cached habit categories: \(error)")
             return nil
         }
-    }
-    
-    // MARK: - Trending Habits Cache
-    
-    func getCachedTrendingHabits() -> [TrendingHabit]? {
-        guard let data = userDefaults.data(forKey: CacheKeys.trendingHabits),
-              let timestamp = userDefaults.object(forKey: "\(CacheKeys.trendingHabits)_timestamp") as? Date else {
-            return nil
-        }
-        
-        let cacheAge = Date().timeIntervalSince(timestamp)
-        guard cacheAge < CacheDurations.trendingHabits else {
-            Log.error("⚠️ Trending habits cache expired")
-            return nil
-        }
-        
-        do {
-            let habits = try JSONDecoder().decode([TrendingHabit].self, from: data)
-            return habits
-        } catch {
-            Log.error("❌ Failed to decode cached trending habits: \(error)")
-            return nil
-        }
-    }
-    
-    
-    
-    // MARK: - Cache Management
-    func clearAllCaches() {
-        let keys = [
-            CacheKeys.habits,
-            CacheKeys.captures,
-            CacheKeys.habitCategories,
-            CacheKeys.trendingHabits,
-            CacheKeys.communityStats,
-            CacheKeys.socialFeedGroups,
-            CacheKeys.userProfile,
-            CacheKeys.lastCacheUpdate
-        ]
-        
-        for key in keys {
-            userDefaults.removeObject(forKey: key)
-            userDefaults.removeObject(forKey: "\(key)_timestamp")
-        }
-        
-        // Clear image cache
-        ImagePreloader.shared.clearCache()
-        
     }
 }
