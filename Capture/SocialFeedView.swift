@@ -524,30 +524,30 @@ struct SocialFeedCategoryBadge: View {
     let category: String
     let color: String?
     
-    private var categoryData: (emoji: String, color: Color) {
+    private var categoryData: (symbol: String, color: Color) {
         switch category.lowercased() {
         case "fitness":
-            return ("💪", CaptureTheme.Palette.fitness)
+            return ("figure.run", CaptureTheme.Palette.fitness)
         case "wellness":
-            return ("🧘", CaptureTheme.Palette.wellness)
+            return ("leaf.fill", CaptureTheme.Palette.wellness)
         case "learning":
-            return ("📚", CaptureTheme.Palette.learning)
+            return ("book.fill", CaptureTheme.Palette.learning)
         case "nutrition":
-            return ("🥗", CaptureTheme.Palette.nutrition)
+            return ("fork.knife", CaptureTheme.Palette.nutrition)
         case "productivity":
-            return ("⚡", CaptureTheme.Palette.productivity)
+            return ("bolt.fill", CaptureTheme.Palette.productivity)
         case "health":
-            return ("🏥", CaptureTheme.Palette.health)
+            return ("heart.fill", CaptureTheme.Palette.health)
         case "social":
-            return ("🤝", CaptureTheme.Palette.social)
+            return ("person.2.fill", CaptureTheme.Palette.social)
         default:
-            return ("🎯", .gray)
+            return ("target", .gray)
         }
     }
     
     var body: some View {
         HStack(spacing: 4) {
-            Text(categoryData.emoji)
+            Image(systemName: categoryData.symbol)
                 .font(.caption)
             
             Text(category)
