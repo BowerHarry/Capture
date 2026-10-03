@@ -15,7 +15,7 @@ A habit tracker for iOS where you complete a habit by taking a photo of it, with
 
 ## Why it exists
 
-Most habit trackers are a checkbox, which is easy to tick without doing the thing. Capture was an experiment in making a photo the proof: the original spec describes it as a camera-first tracker in the spirit of BeReal, using a feed of friends' captures for accountability.
+Most habit trackers are a checkbox, which is easy to tick without doing the thing. Capture was an experiment in making a photo the proof: a camera-first tracker in the spirit of BeReal, using a feed of other people's captures for accountability.
 
 ## What it does
 
@@ -104,7 +104,6 @@ Capture/
   CameraManager.swift       AVFoundation capture session
   Demo/DemoMode.swift       Debug-only demo mode and fixtures
 supabase/schema.sql         Consolidated database schema (untested)
-figma/                      React prototype of the same app, exported from Figma Make, and its spec
 docs/images/                README screenshots
 ```
 
@@ -125,7 +124,7 @@ There are none.
 ## Credits
 
 - [supabase-swift](https://github.com/supabase/supabase-swift) for the backend client.
-- The prototype in `figma/` was generated with Figma Make and includes [shadcn/ui](https://ui.shadcn.com/) components (MIT) and Unsplash photo references. See `figma/Attributions.md`.
+- The screens were first prototyped in Figma Make. That prototype has been removed from the repository; it is in the git history.
 
 ## License
 
