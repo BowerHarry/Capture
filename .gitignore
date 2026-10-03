@@ -1,2 +1,5 @@
 *.sql
 *.md
+!/README.md
+.DS_Store
+build/
