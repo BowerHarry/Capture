@@ -268,12 +268,13 @@ struct HabitDashboardView: View {
     
     private func animateStatsIfNeeded() {
         guard !habitManager.habits.isEmpty else { return }
-        let (totalStreak, longestStreak, todayPercent) = computeStats()
         let duration: Double = 1.2
         let steps: Int = 30
         let stepDuration = duration / Double(steps)
         var step = 0
         Timer.scheduledTimer(withTimeInterval: stepDuration, repeats: true) { timer in
+            // Read the stats on every tick: they may finish computing after the animation starts
+            let (totalStreak, longestStreak, todayPercent) = computeStats()
             step += 1
             let progress = Double(step) / Double(steps)
             let easeOut = 1 - pow(1 - progress, 3)
