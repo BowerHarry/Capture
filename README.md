@@ -36,7 +36,7 @@ Most habit trackers are a checkbox, which is easy to tick without doing the thin
 
 **Stack:** Swift, SwiftUI, AVFoundation, Supabase (Auth, Postgres, Storage) via [supabase-swift](https://github.com/supabase/supabase-swift).
 
-Drafted with AI coding agents. The project was abandoned before the code had a thorough review, so read it as a prototype rather than reviewed work.
+Built as an AI-driven mockup, drafted with AI coding agents, to see whether the idea held up. It was abandoned before the code had a thorough review, so read it as a prototype rather than reviewed work.
 
 ---
 
