@@ -1,5 +1,6 @@
-*.sql
-*.md
-!/README.md
 .DS_Store
 build/
+xcuserdata/
+
+# Local Supabase credentials (copy Capture/Supabase.example.plist)
+Capture/Supabase.plist
