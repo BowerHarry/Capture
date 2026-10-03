@@ -345,63 +345,26 @@ struct ProfileTabsView: View {
 
             
             // Tab Content
-            ScrollView {
-                switch selectedTab {
-                case "overview":
-                    OverviewTabView(
-                        totalStreak: totalStreak,
-                        longestStreak: longestStreak,
-                        completionRate: completionRate,
-                        habitManager: habitManager
-                    )
-                case "achievements":
-                    AchievementsTabView()
-                case "habits":
-                    MyHabitsTabView(habitManager: habitManager)
-                default:
-                    OverviewTabView(
-                        totalStreak: totalStreak,
-                        longestStreak: longestStreak,
-                        completionRate: completionRate,
-                        habitManager: habitManager
-                    )
-                }
+            switch selectedTab {
+            case "overview":
+                OverviewTabView(
+                    totalStreak: totalStreak,
+                    longestStreak: longestStreak,
+                    completionRate: completionRate,
+                    habitManager: habitManager
+                )
+            case "achievements":
+                AchievementsTabView()
+            case "habits":
+                MyHabitsTabView(habitManager: habitManager)
+            default:
+                OverviewTabView(
+                    totalStreak: totalStreak,
+                    longestStreak: longestStreak,
+                    completionRate: completionRate,
+                    habitManager: habitManager
+                )
             }
-            .gesture(
-                DragGesture()
-                    .onEnded { value in
-                        let threshold: CGFloat = 50
-                        if value.translation.width > threshold {
-                            // Swipe right - go to previous tab
-                            switch selectedTab {
-                            case "achievements":
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    selectedTab = "overview"
-                                }
-                            case "habits":
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    selectedTab = "achievements"
-                                }
-                            default:
-                                break
-                            }
-                        } else if value.translation.width < -threshold {
-                            // Swipe left - go to next tab
-                            switch selectedTab {
-                            case "overview":
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    selectedTab = "achievements"
-                                }
-                            case "achievements":
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    selectedTab = "habits"
-                                }
-                            default:
-                                break
-                            }
-                        }
-                    }
-            )
         }
     }
 }
@@ -761,6 +724,7 @@ struct MyHabitsTabView: View {
                     RoundedRectangle(cornerRadius: 20)
                         .stroke(Color(.systemGray5), style: StrokeStyle(lineWidth: 2, dash: [5]))
                 )
+                .padding(.bottom, 60) // Add bottom padding for navigation bar
             } else {
                 // Habits List
                 VStack(spacing: 12) {

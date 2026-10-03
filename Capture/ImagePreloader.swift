@@ -9,16 +9,95 @@ class ImagePreloader: ObservableObject {
     // MARK: - Properties
     
     internal let cache = NSCache<NSString, UIImage>()
-    private var imageCache: [String: UIImage] = [:]
-    private var avatarCache: [String: UIImage] = [:]
-    private var loadingTasks: [String: Task<Void, Never>] = [:]
-    private let lockQueue = DispatchQueue(label: "imagePreloader.lock", attributes: .concurrent)
     
-    // MARK: - Enhanced Caching Properties
+    // Actor for thread-safe access to shared state
+    private actor ImagePreloaderState {
+        var loadingTasks: [String: Task<Void, Never>] = [:]
+        var imageCache: [String: UIImage] = [:]
+        var avatarCache: [String: UIImage] = [:]
+        var trendingThumbnailCache: [String: UIImage] = [:]
+        var trendingThumbnailLoadingTasks: [String: Task<Void, Never>] = [:]
+        var trendingThumbnailCompletions: [String: [(UIImage?) -> Void]] = [:]
+        
+        // Methods for managing loading tasks
+        func setLoadingTask(_ task: Task<Void, Never>, for key: String) {
+            loadingTasks[key] = task
+        }
+        
+        func removeLoadingTask(for key: String) {
+            loadingTasks.removeValue(forKey: key)
+        }
+        
+        func clearAllLoadingTasks() {
+            loadingTasks.removeAll()
+        }
+        
+        func getLoadingTask(for key: String) -> Task<Void, Never>? {
+            return loadingTasks[key]
+        }
+        
+        // Methods for managing trending thumbnail loading tasks
+        func setTrendingThumbnailLoadingTask(_ task: Task<Void, Never>, for key: String) {
+            trendingThumbnailLoadingTasks[key] = task
+        }
+        
+        func removeTrendingThumbnailLoadingTask(for key: String) {
+            trendingThumbnailLoadingTasks.removeValue(forKey: key)
+        }
+        
+        func clearAllTrendingThumbnailLoadingTasks() {
+            trendingThumbnailLoadingTasks.removeAll()
+        }
+        
+        func getTrendingThumbnailLoadingTask(for key: String) -> Task<Void, Never>? {
+            return trendingThumbnailLoadingTasks[key]
+        }
+        
+        // Methods for managing trending thumbnail completions
+        func addTrendingThumbnailCompletion(_ completion: @escaping (UIImage?) -> Void, for key: String) {
+            if trendingThumbnailCompletions[key] == nil {
+                trendingThumbnailCompletions[key] = []
+            }
+            trendingThumbnailCompletions[key]?.append(completion)
+        }
+        
+        func getTrendingThumbnailCompletions(for key: String) -> [(UIImage?) -> Void] {
+            return trendingThumbnailCompletions[key] ?? []
+        }
+        
+        func clearTrendingThumbnailCompletions(for key: String) {
+            trendingThumbnailCompletions[key] = []
+        }
+        
+        func clearAllTrendingThumbnailCompletions() {
+            trendingThumbnailCompletions.removeAll()
+        }
+        
+        // Methods for managing caches
+        func setImageCache(_ image: UIImage, for key: String) {
+            imageCache[key] = image
+        }
+        
+        func setAvatarCache(_ image: UIImage, for key: String) {
+            avatarCache[key] = image
+        }
+        
+        func setTrendingThumbnailCache(_ image: UIImage, for key: String) {
+            trendingThumbnailCache[key] = image
+        }
+        
+        func getTrendingThumbnailCache(for key: String) -> UIImage? {
+            return trendingThumbnailCache[key]
+        }
+        
+        func clearAllCaches() {
+            imageCache.removeAll()
+            avatarCache.removeAll()
+            trendingThumbnailCache.removeAll()
+        }
+    }
     
-    private var trendingThumbnailCache: [String: UIImage] = [:]
-    private var trendingThumbnailLoadingTasks: [String: Task<Void, Never>] = [:]
-    private var trendingThumbnailCompletions: [String: [(UIImage?) -> Void]] = [:]
+    private let state = ImagePreloaderState()
     
     // MARK: - Performance Properties
     
@@ -76,9 +155,7 @@ class ImagePreloader: ObservableObject {
         cacheMisses += 1
         
         // Check if already loading with proper synchronization
-        let isAlreadyLoading = await lockQueue.sync {
-            loadingTasks[normalizedURL] != nil
-        }
+        let isAlreadyLoading = await state.getLoadingTask(for: normalizedURL) != nil
         
         if isAlreadyLoading {
             print("🖼️ Image already loading: \(normalizedURL)")
@@ -94,9 +171,7 @@ class ImagePreloader: ObservableObject {
         }
         
         // Add task to loadingTasks with proper synchronization
-        await lockQueue.sync {
-            loadingTasks[normalizedURL] = task
-        }
+        await state.setLoadingTask(task, for: normalizedURL)
         
         // Don't wait for completion, just return nil
         // The image will be available in cache when it's ready
@@ -162,9 +237,9 @@ class ImagePreloader: ObservableObject {
         guard let imageURL = URL(string: normalizedURL) else { return }
         
         // Only preload if not already cached or loading with proper synchronization
-        let shouldPreload = await lockQueue.sync {
-            cache.object(forKey: normalizedURL as NSString) == nil && loadingTasks[normalizedURL] == nil
-        }
+        let isNotCached = cache.object(forKey: normalizedURL as NSString) == nil
+        let isNotLoading = await state.getLoadingTask(for: normalizedURL) == nil
+        let shouldPreload = isNotCached && isNotLoading
         
         if shouldPreload {
             Task {
@@ -211,23 +286,17 @@ class ImagePreloader: ObservableObject {
                     self.cache.setObject(image, forKey: key as NSString)
                 }
                 // Remove task from loadingTasks with proper synchronization
-                await lockQueue.sync {
-                    self.loadingTasks.removeValue(forKey: key)
-                }
+                await state.removeLoadingTask(for: key)
                 print("✅ Successfully cached image: \(key)")
             } else {
                 print("❌ Failed to create UIImage from data: \(key)")
                 // Remove task from loadingTasks with proper synchronization
-                await lockQueue.sync {
-                    self.loadingTasks.removeValue(forKey: key)
-                }
+                await state.removeLoadingTask(for: key)
             }
         } catch {
             print("❌ Failed to load image: \(key) - \(error.localizedDescription)")
             // Remove task from loadingTasks with proper synchronization
-            await lockQueue.sync {
-                self.loadingTasks.removeValue(forKey: key)
-            }
+            await state.removeLoadingTask(for: key)
         }
     }
     
@@ -259,19 +328,15 @@ class ImagePreloader: ObservableObject {
     
     func clearCache() {
         cache.removeAllObjects()
-        imageCache.removeAll()
-        avatarCache.removeAll()
-        trendingThumbnailCache.removeAll()
         
-        // Cancel and clear loading tasks with proper synchronization
-        lockQueue.sync {
-            loadingTasks.values.forEach { $0.cancel() }
-            loadingTasks.removeAll()
+        Task {
+            // Cancel and clear loading tasks with proper synchronization
+            await state.clearAllLoadingTasks()
+            await state.clearAllCaches()
+            await state.clearAllTrendingThumbnailLoadingTasks()
+            await state.clearAllTrendingThumbnailCompletions()
         }
         
-        trendingThumbnailLoadingTasks.values.forEach { $0.cancel() }
-        trendingThumbnailLoadingTasks.removeAll()
-        trendingThumbnailCompletions.removeAll()
         print("🗑️ Image cache cleared")
     }
     
@@ -359,25 +424,23 @@ extension ImagePreloader {
             return cached
         }
         
-        // Check if already loading - use lock to prevent race conditions
-        return await lockQueue.sync {
-            if trendingThumbnailLoadingTasks[normalizedURL] != nil {
-                NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
-                // Return nil immediately - don't wait to prevent blocking
-                return nil
-            }
-            
-            NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
-            
-            // Start loading
-            let task = Task {
-                await loadTrendingThumbnail(url: normalizedURL, size: size)
-            }
-            trendingThumbnailLoadingTasks[normalizedURL] = task
-            
-            // Return nil immediately - the image will be cached when ready
+        // Check if already loading - use actor to prevent race conditions
+        if await state.getTrendingThumbnailLoadingTask(for: normalizedURL) != nil {
+            NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
+            // Return nil immediately - don't wait to prevent blocking
             return nil
         }
+        
+        NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
+        
+        // Start loading
+        let task = Task {
+            await loadTrendingThumbnail(url: normalizedURL, size: size)
+        }
+        await state.setTrendingThumbnailLoadingTask(task, for: normalizedURL)
+        
+        // Return nil immediately - the image will be cached when ready
+        return nil
     }
     
     // Get trending thumbnail with completion callback
@@ -397,31 +460,26 @@ extension ImagePreloader {
             return
         }
         
-        // Check if already loading
-        lockQueue.sync {
-            if trendingThumbnailLoadingTasks[normalizedURL] != nil {
+        // Use async task to handle actor access
+        Task {
+            // Check if already loading
+            if await state.getTrendingThumbnailLoadingTask(for: normalizedURL) != nil {
                 NSLog("[ImagePreloader] getTrendingThumbnail: already loading thumbnail for %@", normalizedURL)
                 // Store completion callback to be called when loading finishes
-                if trendingThumbnailCompletions[normalizedURL] == nil {
-                    trendingThumbnailCompletions[normalizedURL] = []
-                }
-                trendingThumbnailCompletions[normalizedURL]?.append(completion)
+                await state.addTrendingThumbnailCompletion(completion, for: normalizedURL)
                 return
             }
             
             NSLog("[ImagePreloader] getTrendingThumbnail: loading thumbnail for %@", normalizedURL)
             
             // Store completion callback
-            if trendingThumbnailCompletions[normalizedURL] == nil {
-                trendingThumbnailCompletions[normalizedURL] = []
-            }
-            trendingThumbnailCompletions[normalizedURL]?.append(completion)
+            await state.addTrendingThumbnailCompletion(completion, for: normalizedURL)
             
             // Start loading
             let task = Task {
                 await loadTrendingThumbnail(url: normalizedURL, size: size)
             }
-            trendingThumbnailLoadingTasks[normalizedURL] = task
+            await state.setTrendingThumbnailLoadingTask(task, for: normalizedURL)
         }
     }
     
@@ -440,14 +498,23 @@ extension ImagePreloader {
     }
     
     private func getCachedTrendingThumbnail(for url: String) -> UIImage? {
-        return lockQueue.sync {
-            return trendingThumbnailCache[url]
+        // This needs to be async, but we can't make it async due to existing API
+        // For now, we'll use a synchronous approach with a semaphore
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: UIImage?
+        
+        Task {
+            result = await state.getTrendingThumbnailCache(for: url)
+            semaphore.signal()
         }
+        
+        semaphore.wait()
+        return result
     }
     
     private func setCachedTrendingThumbnail(_ image: UIImage, for url: String) {
-        lockQueue.sync {
-            trendingThumbnailCache[url] = image
+        Task {
+            await state.setTrendingThumbnailCache(image, for: url)
         }
     }
     
@@ -486,15 +553,12 @@ extension ImagePreloader {
             setCachedTrendingThumbnail(thumbnail, for: url)
             
             // Clean up loading task
-            lockQueue.sync {
-                trendingThumbnailLoadingTasks.removeValue(forKey: url)
-            }
+            await state.removeTrendingThumbnailLoadingTask(for: url)
             
             // Call all completion callbacks
-            lockQueue.sync {
-                trendingThumbnailCompletions[url]?.forEach { $0(thumbnail) }
-                trendingThumbnailCompletions[url] = [] // Clear completions after calling
-            }
+            let completions = await state.getTrendingThumbnailCompletions(for: url)
+            await state.clearTrendingThumbnailCompletions(for: url) // Clear completions after calling
+            completions.forEach { $0(thumbnail) }
             
             NSLog("[ImagePreloader] loadTrendingThumbnail: successfully cached thumbnail for %@", url)
             
@@ -502,15 +566,12 @@ extension ImagePreloader {
             NSLog("[ImagePreloader] loadTrendingThumbnail: error loading %@: %@", url, error.localizedDescription)
             
             // Clean up loading task
-            lockQueue.sync {
-                trendingThumbnailLoadingTasks.removeValue(forKey: url)
-            }
+            await state.removeTrendingThumbnailLoadingTask(for: url)
             
             // Call all completion callbacks with nil
-            lockQueue.sync {
-                trendingThumbnailCompletions[url]?.forEach { $0(nil) }
-                trendingThumbnailCompletions[url] = [] // Clear completions after calling
-            }
+            let completions = await state.getTrendingThumbnailCompletions(for: url)
+            await state.clearTrendingThumbnailCompletions(for: url) // Clear completions after calling
+            completions.forEach { $0(nil) }
         }
     }
     
@@ -550,10 +611,10 @@ extension ImagePreloader {
     
     // Clear trending thumbnail cache
     func clearTrendingThumbnailCache() {
-        lockQueue.sync {
-            trendingThumbnailCache.removeAll()
-            trendingThumbnailLoadingTasks.removeAll()
-            trendingThumbnailCompletions.removeAll()
+        Task {
+            await state.clearAllCaches()
+            await state.clearAllTrendingThumbnailLoadingTasks()
+            await state.clearAllTrendingThumbnailCompletions()
         }
     }
 }

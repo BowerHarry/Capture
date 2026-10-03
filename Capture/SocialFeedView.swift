@@ -20,13 +20,13 @@ struct SocialFeedView: View {
             VStack(spacing: 0) {
                 // Header
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Social Feed")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        
-                        Spacer()
-                    }
+//                    HStack {
+//                        Text("Social Feed")
+//                            .font(.largeTitle)
+//                            .fontWeight(.bold)
+//                        
+//                        Spacer()
+//                    }
                     
                     // Tab Picker
                     Picker("Feed Tab", selection: $selectedTab) {
