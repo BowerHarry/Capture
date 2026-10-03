@@ -100,7 +100,7 @@ struct UserProfileView: View {
             
             userHabits = habits
         } catch {
-            print("❌ Failed to load user habits: \(error)")
+            Log.error("❌ Failed to load user habits: \(error)")
             userHabits = []
         }
     }
@@ -117,7 +117,7 @@ struct UserProfileView: View {
             
             userCaptures = captures
         } catch {
-            print("❌ Failed to load user captures: \(error)")
+            Log.error("❌ Failed to load user captures: \(error)")
             userCaptures = []
         }
     }
@@ -341,7 +341,6 @@ struct UserProfileHeaderView: View {
                 .execute()
                 .value
             
-            print("📊 User \(user.id) has \(followersResponse.count) followers and \(followingResponse.count) following")
             
             // Update the state variables
             await MainActor.run {
@@ -349,7 +348,7 @@ struct UserProfileHeaderView: View {
                 followingCount = followingResponse.count
             }
         } catch {
-            print("❌ Failed to load follower counts for user \(user.id): \(error)")
+            Log.error("❌ Failed to load follower counts for user \(user.id): \(error)")
         }
     }
 }
@@ -404,7 +403,7 @@ struct UserProfileTabsView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: isOwnProfile) { newValue in
+            .onChange(of: isOwnProfile) { _, newValue in
                 // If viewing someone else's profile and habits tab is selected, switch to overview
                 if !newValue && selectedTab == "habits" {
                     selectedTab = "overview"
@@ -594,8 +593,6 @@ struct UserHabitsTabView: View {
         .padding(20)
     }
 }
-
-
 
 // MARK: - User Habit Card
 

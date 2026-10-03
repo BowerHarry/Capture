@@ -369,40 +369,6 @@ struct ProfileTabsView: View {
     }
 }
 
-struct TabButton: View {
-    let title: String
-    let icon: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
-                Text(title)
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundColor(isSelected ? .white : .secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .padding(.horizontal, 8)
-            .background(
-                isSelected ?
-                AnyShapeStyle(
-                    LinearGradient(
-                        colors: [.primary, .primary.opacity(0.8)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                ) : AnyShapeStyle(Color.clear)
-            )
-            .cornerRadius(16)
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
 // MARK: - Overview Tab
 
 struct OverviewTabView: View {
@@ -491,49 +457,6 @@ struct OverviewTabView: View {
         .sheet(isPresented: $showingFollowing) {
             FollowingListView(userId: authManager.currentUser?.id ?? UUID())
         }
-    }
-}
-
-struct PerformanceCard: View {
-    let icon: String
-    let value: String
-    let label: String
-    let gradient: [Color]
-    let iconColor: Color
-    let textColor: Color
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(iconColor)
-                    .frame(width: 20, height: 20)
-                    .background(iconColor.opacity(0.1))
-                    .clipShape(Circle())
-                
-                Text(value)
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(textColor)
-            }
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(textColor.opacity(0.8))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: gradient,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .cornerRadius(20)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(textColor.opacity(0.2), lineWidth: 1)
-        )
     }
 }
 
@@ -1037,7 +960,7 @@ struct AvatarPickerView: View {
             .sheet(isPresented: $showingImagePicker) {
                 ImagePickerCropper(selectedImage: $selectedImage)
             }
-            .onChange(of: selectedImage) { image in
+            .onChange(of: selectedImage) { _, image in
                 if let image = image {
                     Task {
                         await uploadAvatar(image)
@@ -1094,13 +1017,9 @@ struct AvatarPickerView: View {
         isLoading = true
         defer { isLoading = false }
         
-        do {
-            // Convert emoji to image and upload
-            if let image = emojiToImage(avatar) {
-                await uploadAvatar(image)
-            }
-        } catch {
-            print("Error selecting generic avatar: \(error)")
+        // Convert emoji to image and upload
+        if let image = emojiToImage(avatar) {
+            await uploadAvatar(image)
         }
     }
     
@@ -1137,7 +1056,6 @@ struct AvatarPickerView: View {
     }
     
     private func uploadAvatar(_ image: UIImage) async {
-        print("📱 Starting avatar upload...")
         isLoading = true
         defer { isLoading = false }
         
@@ -1180,13 +1098,11 @@ struct AvatarPickerView: View {
             }
             
         } catch {
-            print("Error uploading avatar: \(error)")
+            Log.error("Error uploading avatar: \(error)")
             // You might want to show an error alert here
         }
     }
 }
-
-
 
 // MARK: - Supporting Types
 
@@ -1244,8 +1160,6 @@ struct AvatarImageView: View {
         .environmentObject(AuthManager.shared)
         .environmentObject(SocialManager.shared)
 }
-
-
 
 struct ProfileUserListItem: View {
     let user: User
@@ -1336,9 +1250,7 @@ struct FollowersListView: View {
             }
         }
         .task {
-            print("🔄 Loading followers for user: \(userId)")
             followers = await socialManager.getFollowers(userId: userId)
-            print("📊 Loaded \(followers.count) followers")
             isLoading = false
         }
     }
@@ -1388,9 +1300,7 @@ struct FollowingListView: View {
             }
         }
         .task {
-            print("🔄 Loading following for user: \(userId)")
             following = await socialManager.getFollowing(userId: userId)
-            print("📊 Loaded \(following.count) following")
             isLoading = false
         }
     }

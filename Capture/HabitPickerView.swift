@@ -68,7 +68,7 @@ struct HabitPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
             .task { await habitManager.loadAvailableHabits() }
-            .onChange(of: selectedHabit?.id) { newId in if newId != nil { dismiss() } }
+            .onChange(of: selectedHabit?.id) { _, newId in if newId != nil { dismiss() } }
             .sheet(isPresented: $showingCreate) {
                 CustomHabitView(
                     onCreated: { habit in selectedHabit = habit },

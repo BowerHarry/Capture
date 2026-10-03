@@ -152,10 +152,10 @@ struct HabitDashboardView: View {
                     greetingCollapsed = stored
                 }
             }
-            .onChange(of: habitsCollapsed) { newValue in
+            .onChange(of: habitsCollapsed) { _, newValue in
                 UserDefaults.standard.set(newValue, forKey: "habitsCollapsed")
             }
-            .onChange(of: greetingCollapsed) { newValue in
+            .onChange(of: greetingCollapsed) { _, newValue in
                 UserDefaults.standard.set(newValue, forKey: "greetingCollapsed")
             }
             .task { 
@@ -164,7 +164,7 @@ struct HabitDashboardView: View {
                 // Preload habit capture images after habits are loaded
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
-            .onChange(of: authManager.isAuthenticated) { isAuthed in
+            .onChange(of: authManager.isAuthenticated) { _, isAuthed in
                 if isAuthed { 
                     Task { 
                         await loadHabitsWithCache()
@@ -181,7 +181,7 @@ struct HabitDashboardView: View {
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
             .sheet(isPresented: $showingHabitPicker) { HabitPickerView(selectedHabit: $tempSelectedHabit) }
-            .onChange(of: habitManager.habits) { _ in
+            .onChange(of: habitManager.habits) { _, _ in
                 // Update stats when habits change
                 let (totalStreak, longestStreak, todayPercent) = computeStats()
                 animatedTotalStreak = totalStreak
@@ -191,28 +191,28 @@ struct HabitDashboardView: View {
                 // Preload habit capture images when habits change
                 imagePreloader.preloadHabitCaptures(habitManager.captures)
             }
-            .onChange(of: habitManager.totalStreakSum) { _ in
+            .onChange(of: habitManager.totalStreakSum) { _, _ in
                 // Update stats when computed stats change
                 let (totalStreak, longestStreak, todayPercent) = computeStats()
                 animatedTotalStreak = totalStreak
                 animatedLongestStreak = longestStreak
                 animatedTodayPercent = todayPercent
             }
-            .onChange(of: habitManager.longestStreakValue) { _ in
+            .onChange(of: habitManager.longestStreakValue) { _, _ in
                 // Update stats when computed stats change
                 let (totalStreak, longestStreak, todayPercent) = computeStats()
                 animatedTotalStreak = totalStreak
                 animatedLongestStreak = longestStreak
                 animatedTodayPercent = todayPercent
             }
-            .onChange(of: habitManager.todayPercentValue) { _ in
+            .onChange(of: habitManager.todayPercentValue) { _, _ in
                 // Update stats when computed stats change
                 let (totalStreak, longestStreak, todayPercent) = computeStats()
                 animatedTotalStreak = totalStreak
                 animatedLongestStreak = longestStreak
                 animatedTodayPercent = todayPercent
             }
-            .onChange(of: selectedTab) { newTab in
+            .onChange(of: selectedTab) { _, newTab in
                 // Use ultra-optimized loading for progress grid tab
                 if newTab == "grid" {
                     Task {
@@ -759,121 +759,6 @@ private struct CollapsedHabitsList: View {
     }
 }
 
-private struct ExpandedHabitsList: View {
-    @EnvironmentObject var habitManager: HabitManager
-    let onCapture: (UUID) -> Void
-    
-    private var sortedHabits: [Habit] {
-        habitManager.habits.sorted { habit1, habit2 in
-            let habit1Completed = habitManager.progress(for: habit1.id)?.isComplete == true
-            let habit2Completed = habitManager.progress(for: habit2.id)?.isComplete == true
-            
-            // Show incomplete habits first, then completed ones
-            if habit1Completed != habit2Completed {
-                return !habit1Completed
-            }
-            
-            // If both have same completion status, sort by name
-            return habit1.name < habit2.name
-        }
-    }
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            ForEach(sortedHabits) { habit in
-                VStack(alignment: .leading, spacing: 12) {
-                    // Header with habit name and camera button
-                    HStack {
-                        Text(habit.name).font(.headline)
-                        Spacer()
-                        Button(action: { onCapture(habit.id) }) {
-                            Image(systemName: "camera.aperture").font(.system(size: 18)).foregroundColor(.primary)
-                        }
-                    }
-                    
-                    // Category display underneath habit name
-                    Text("Category: \(habit.category)")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(categoryColor(habit.category).opacity(0.2))
-                        .foregroundColor(categoryColor(habit.category))
-                        .cornerRadius(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onAppear {
-                            print("[ExpandedHabitsList] Category for \(habit.name): \(habit.category)")
-                        }
-                    
-                    // Streak info
-                    HStack {
-                        Spacer()
-                        
-                        // Streak display - more prominent
-                        let streakValue = habitManager.progress(for: habit.id)?.currentStreak ?? 0
-                                                  let progress = habitManager.progress(for: habit.id)
-                          HStack(spacing: 6) {
-                              Image(systemName: "flame").foregroundColor(.orange).font(.system(size: 14))
-                              Text("\(streakValue)").font(.system(size: 14, weight: .bold)).foregroundColor(.orange)
-                          }
-                          .padding(.horizontal, 8).padding(.vertical, 4)
-                          .background(Color.orange.opacity(0.15))
-                          .cornerRadius(8)
-                        .onAppear {
-                            print("[ExpandedHabitsList] Habit: \(habit.name), Progress: \(progress?.currentStreak ?? -1), Streak: \(streakValue)")
-                        }
-                    }
-                    
-                    // Progress text
-                    Text(progressText(for: habit)).font(.caption).foregroundColor(.secondary)
-                    
-                    // Progress bar
-                    GradientProgressBar(percentage: progressPercent(for: habit))
-                }
-                .padding(14)
-                .background(Color(.systemBackground))
-                .cornerRadius(14)
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(CaptureTheme.Palette.border, lineWidth: 1))
-                .onAppear {
-                    print("[ExpandedHabitsList] Habit data: name=\(habit.name), category=\(habit.category), id=\(habit.id)")
-                }
-            }
-        }
-    }
-    
-    private func categoryColor(_ category: String) -> Color {
-        // Try to find the category in the database first
-        if let habitCategory = habitManager.habitCategories.first(where: { $0.name.lowercased() == category.lowercased() }) {
-            return CaptureTheme.categoryColor(from: habitCategory.color)
-        }
-        
-        // Default to gray if category not found
-        return .gray
-    }
-    
-    private func singularPeriod(_ period: String) -> String {
-        switch period.lowercased() {
-        case "daily": return "day"
-        case "weekly": return "week"
-        case "monthly": return "month"
-        default: return period
-        }
-    }
-    
-    private func progressPercent(for habit: Habit) -> Double {
-        let progress = habitManager.progress(for: habit.id)
-        let current = Double(progress?.completedCount ?? 0)
-        let target = Double(habit.targetCount ?? 1)
-        return min(100, max(0, (current / max(target, 1)) * 100))
-    }
-    
-    private func progressText(for habit: Habit) -> String {
-        let number = habit.targetCount ?? 1
-        let period = singularPeriod(habit.targetFrequency)
-        if number <= 1 { return "once per \(period)" }
-        return "\(number) times per \(period)"
-    }
-}
-
 private struct ProgressGridList: View {
     @EnvironmentObject var habitManager: HabitManager
     @State private var cachedHabitData: [OptimizedHabitData] = []
@@ -957,11 +842,10 @@ private struct ProgressGridList: View {
                 }
             }
         }
-        .onChange(of: habitManager.habitCategories.count) { _ in
+        .onChange(of: habitManager.habitCategories.count) { _, _ in
             // Clear cache when categories are loaded so colors are recomputed
             cachedHabitData = []
             lastUpdateTime = Date.distantPast
-            print("🔄 ProgressGridList: Cleared cache due to category change")
         }
     }
     
@@ -993,49 +877,9 @@ private struct OptimizedHabitData: Identifiable {
     var id: UUID { habit.id }
 }
 
-
     
 
     
-
-
-
-
-
-private struct EmptyStateCard: View {
-    let onCreate: () -> Void
-    var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle().fill(CaptureTheme.Palette.accent).frame(width: 96, height: 96)
-                Text("🎯").font(.system(size: 34))
-            }
-            Text("Ready to start your journey?").font(.headline)
-            Text("Create your first habit and join the community! Track your progress, share photos, and build consistency together.")
-                .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            Button(action: onCreate) {
-                HStack {
-                    Image(systemName: "plus").font(.system(size: 14))
-                    Text("Create Your First Habit").fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.black)
-                .foregroundColor(.white)
-                .cornerRadius(10)
-            }
-            .padding(.horizontal, 24)
-            Text("Popular: 💪 Workout • 📚 Reading • 🧘 Meditation")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 24)
-        .background(LinearGradient(colors: [CaptureTheme.Palette.accent.opacity(0.2), CaptureTheme.Palette.card], startPoint: .topLeading, endPoint: .bottomTrailing))
-        .cornerRadius(20)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(CaptureTheme.Palette.border, lineWidth: 1))
-    }
-}
 
 struct EmptyHabitsView: View {
     let onCreateHabit: () -> Void
@@ -1085,7 +929,6 @@ extension HabitDashboardView {
         // Try cache first
         if let cachedHabits = AppCacheManager.shared.getCachedHabits() {
             habitManager.habits = cachedHabits
-            print("📱 Loaded habits from cache")
             return
         }
         
@@ -1100,7 +943,6 @@ extension HabitDashboardView {
         if let cachedCategories = AppCacheManager.shared.getCachedHabitCategories() {
             habitManager.habitCategories = cachedCategories
             habitManager.categories = cachedCategories.map { DiscoveryHabitCategory(from: $0) }
-            print("📱 Loaded habit categories from cache")
             return
         }
         

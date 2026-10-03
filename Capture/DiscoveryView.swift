@@ -21,7 +21,7 @@ struct DiscoveryView: View {
                 SearchBar(text: $searchQuery, placeholder: searchPlaceholder)
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
-                    .onChange(of: searchQuery) { newValue in
+                    .onChange(of: searchQuery) { _, newValue in
                         Task {
                             await performSearch(query: newValue)
                         }
@@ -36,7 +36,7 @@ struct DiscoveryView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
-                .onChange(of: selectedTab) { newValue in
+                .onChange(of: selectedTab) { _, newValue in
                     searchQuery = ""
                     // Clear filtered users when switching to Users tab
                     if newValue == 2 {
@@ -277,14 +277,13 @@ struct TrendingTabContent: View {
                         // Create habit from template
                         do {
                             _ = try await habitManager.createHabitFromTemplate(templateId: habit.id)
-                            print("✅ Successfully added habit: \(habit.name)")
                             
                             // Switch to home tab
                             DispatchQueue.main.async {
                                 onSwitchToHomeTab()
                             }
                         } catch {
-                            print("❌ Error creating habit from template: \(error)")
+                            Log.error("❌ Error creating habit from template: \(error)")
                         }
                     }
                 },
@@ -308,7 +307,7 @@ struct TrendingTabContent: View {
             // Ensure images are preloaded when the view appears
             preloadTrendingImages()
         }
-        .onChange(of: selectedCategoryId) { newCategoryId in
+        .onChange(of: selectedCategoryId) { _, newCategoryId in
             // Load trending habits by category when category changes
             if let categoryId = newCategoryId {
                 Task {
@@ -670,7 +669,7 @@ struct TrendingHabitsSection: View {
                 
                 Spacer()
                 
-                if let selectedCategoryId = selectedCategoryId {
+                if selectedCategoryId != nil {
                     Button("Clear") {
                         onClearCategory?()
                     }
@@ -722,7 +721,6 @@ struct DiscoveryHabitCard: View {
                 return imageUrl
             }
             
-            let _ = NSLog("[DiscoveryHabitCard] habit: %@, trendingCaptures count: %d, captureUrls count: %d", habit.name, trendingCaptures.count, captureUrls.count)
             
             HabitPhotoGrid(captures: captureUrls, habitName: habit.name)
                 .frame(width: 48, height: 48)
@@ -884,19 +882,10 @@ struct HabitPhotoGrid: View {
     let habitName: String
     
     var body: some View {
-        let safeCaptures = captures.compactMap { item in
-            if let string = item as? String {
-                return string
-            } else {
-                NSLog("[HabitPhotoGrid] Warning: non-string item in captures array: %@", String(describing: item))
-                return nil
-            }
-        }
         
-        let validCaptures = safeCaptures.filter { !$0.isEmpty }
+        let validCaptures = captures.filter { !$0.isEmpty }
         let photosToShow = validCaptures.count >= 4 ? Array(validCaptures.prefix(4)) : (validCaptures.isEmpty ? [] : Array(validCaptures.prefix(1)))
         
-        let _ = NSLog("[HabitPhotoGrid] habit: %@, original captures count: %d, valid captures count: %d, photosToShow count: %d", habitName, safeCaptures.count, validCaptures.count, photosToShow.count)
         
         Group {
             if photosToShow.isEmpty {
@@ -953,48 +942,6 @@ struct HabitPhotoGrid: View {
 
 // MARK: - Thumbnail Async Image Component
 
-struct ThumbnailAsyncImage<Content: View, Placeholder: View>: View {
-    let url: String
-    let size: CGSize
-    let content: (Image) -> Content
-    let placeholder: () -> Placeholder
-    
-    @StateObject private var imagePreloader = ImagePreloader.shared
-    @State private var image: UIImage?
-    @State private var isLoading = true
-    
-    init(url: String, size: CGSize, @ViewBuilder content: @escaping (Image) -> Content, @ViewBuilder placeholder: @escaping () -> Placeholder) {
-        self.url = url
-        self.size = size
-        self.content = content
-        self.placeholder = placeholder
-    }
-    
-    var body: some View {
-        Group {
-            if let image = image {
-                content(Image(uiImage: image))
-            } else {
-                placeholder()
-            }
-        }
-        .onAppear {
-            loadThumbnail()
-        }
-    }
-    
-    private func loadThumbnail() {
-        Task {
-            if let thumbnail = await imagePreloader.getTrendingThumbnail(for: url, size: size) {
-                await MainActor.run {
-                    self.image = thumbnail
-                    self.isLoading = false
-                }
-            }
-        }
-    }
-}
-
 struct TrendingThumbnailAsyncImage<Content: View, Placeholder: View>: View {
     let imageUrl: String
     let size: CGSize
@@ -1023,7 +970,7 @@ struct TrendingThumbnailAsyncImage<Content: View, Placeholder: View>: View {
         .onAppear {
             loadThumbnail()
         }
-        .onChange(of: imageUrl) { _ in
+        .onChange(of: imageUrl) { _, _ in
             loadThumbnail()
         }
     }
@@ -1157,33 +1104,6 @@ struct StatItem: View {
 
 // MARK: - Shared Components
 
-struct EmptyStateView: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 48))
-                .foregroundColor(.gray)
-            
-            VStack(spacing: 8) {
-                Text(title)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 100)
-    }
-}
-
 struct CategoryFlowLayout<Content: View>: View {
     let categories: [DiscoveryHabitCategory]
     let content: (DiscoveryHabitCategory) -> Content
@@ -1192,7 +1112,6 @@ struct CategoryFlowLayout<Content: View>: View {
     
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
             let spacing: CGFloat = 8
             
             VStack(alignment: .leading, spacing: spacing) {
@@ -1252,20 +1171,4 @@ struct CategoryFlowLayout<Content: View>: View {
         return CGFloat(rows.count) * rowHeight
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

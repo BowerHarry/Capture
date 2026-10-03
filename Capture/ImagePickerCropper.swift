@@ -60,7 +60,7 @@ struct ImagePickerCropper: View {
                     }
                 }
             }
-            .onChange(of: selectedItem) { item in
+            .onChange(of: selectedItem) { _, item in
                 Task {
                     if let data = try? await item?.loadTransferable(type: Data.self),
                        let image = UIImage(data: data) {
@@ -198,13 +198,6 @@ struct ImageCropperView: View {
     }
     
     private func cropImage() -> UIImage {
-        print("✂️ Starting crop process...")
-        print("✂️ Original image size: \(image.size)")
-        print("✂️ Image orientation: \(image.imageOrientation.rawValue)")
-        print("✂️ Image scale: \(image.scale)")
-        print("✂️ Current scale: \(scale)")
-        print("✂️ Current offset: \(offset)")
-        print("✂️ View size: \(viewSize)")
         
         let outputSize = CGSize(width: 400, height: 400)
         
@@ -278,18 +271,6 @@ struct ImageCropperView: View {
         // Clamp the source rect to be within the image bounds
         sourceRect = sourceRect.intersection(CGRect(origin: .zero, size: image.size))
         
-        print("✂️ Container size: \(containerSize)")
-        print("✂️ Image display size: \(imageDisplaySize)")
-        print("✂️ Scaled display size: \(scaledDisplaySize)")
-        print("✂️ Image view rect: \(imageViewRect)")
-        print("✂️ Crop center in container: \(cropCenterInContainer)")
-        print("✂️ Crop center relative to image view: \(cropCenterRelativeToImageView)")
-        print("✂️ Normalized crop center: \(normalizedCropCenter)")
-        print("✂️ Crop center in image: \(cropCenterInImage)")
-        print("✂️ Crop radius in image: \(cropRadiusInImage)")
-        print("✂️ Source rect (before clamp): \(CGRect(x: cropCenterInImage.x - cropRadiusInImage, y: cropCenterInImage.y - cropRadiusInImage, width: cropRadiusInImage * 2, height: cropRadiusInImage * 2))")
-        print("✂️ Source rect (after clamp): \(sourceRect)")
-        print("✂️ Image bounds: \(CGRect(origin: .zero, size: image.size))")
         
         // Instead of cropping the CGImage (which loses orientation), 
         // we'll draw the full image with a clipping path and transform
@@ -329,7 +310,6 @@ struct ImageCropperView: View {
         context.restoreGState()
         
         let result = UIGraphicsGetImageFromCurrentImageContext() ?? image
-        print("✅ Crop successful: \(result.size)")
         return result
     }
 }

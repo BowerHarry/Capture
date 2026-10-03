@@ -25,15 +25,12 @@ struct ContentView: View {
                     await loadHabitsWithCache()
                     await loadHabitCategoriesWithCache()
                     
-                    // Start background preloading
-                    cacheManager.startBackgroundPreloading()
-                    
                     // Preload images for current habits
                     imagePreloader.preloadHabitCaptures(habitManager.captures)
                 }
             }
         }
-        .onChange(of: authManager.isAuthenticated) { isAuthed in
+        .onChange(of: authManager.isAuthenticated) { _, isAuthed in
             if isAuthed {
                 Task { 
                     await loadHabitsWithCache()
@@ -66,7 +63,6 @@ extension ContentView {
         // Try cache first
         if let cachedHabits = cacheManager.getCachedHabits() {
             habitManager.habits = cachedHabits
-            print("📱 Loaded habits from cache")
             
             // Load captures in background
             Task {
@@ -85,7 +81,6 @@ extension ContentView {
     private func loadCapturesWithCache() async {
         if let cachedCaptures = cacheManager.getCachedCaptures() {
             habitManager.captures = cachedCaptures
-            print("📱 Loaded captures from cache")
             return
         }
         
@@ -95,7 +90,7 @@ extension ContentView {
             habitManager.captures = captures
             cacheManager.cacheCaptures(captures)
         } catch {
-            print("❌ Failed to load captures: \(error)")
+            Log.error("❌ Failed to load captures: \(error)")
         }
     }
     
@@ -103,7 +98,6 @@ extension ContentView {
         if let cachedCategories = cacheManager.getCachedHabitCategories() {
             habitManager.habitCategories = cachedCategories
             habitManager.categories = cachedCategories.map { DiscoveryHabitCategory(from: $0) }
-            print("📱 Loaded habit categories from cache")
             return
         }
         
@@ -206,7 +200,7 @@ struct MainTabView: View {
                 await preloadImagesForAllTabs()
             }
         }
-        .onChange(of: selectedTab) { newTab in
+        .onChange(of: selectedTab) { _, newTab in
             // Preload images for the tab that's about to be selected
             Task {
                 await preloadImagesForTab(newTab)
@@ -227,48 +221,20 @@ struct MainTabView: View {
     // MARK: - Image Preloading Functions
     
     private func preloadImagesForAllTabs() async {
-        // Preload user avatar
-        if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
-            imagePreloader.preloadImageSync(url: avatar)
-        }
-        
-        // Preload habit captures
-        imagePreloader.preloadHabitCaptures(habitManager.captures)
-        
-        // Preload discovery images in background
+        await preloadImagesForTab(0)
         await preloadDiscoveryImages()
-        
-        // Preload social feed images (if available)
-        // This will be called when social data is loaded
     }
     
     private func preloadImagesForTab(_ tab: Int) async {
         switch tab {
-        case 0: // Dashboard
-            // Preload habit captures and user avatars
+        case 0, 4: // Dashboard and Profile both show the user's avatar and captures
             imagePreloader.preloadHabitCaptures(habitManager.captures)
-            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
+            if let avatar = authManager.currentUser?.avatar {
                 imagePreloader.preloadImageSync(url: avatar)
             }
-            
-        case 1: // Social Feed
-            // Preload social feed images and user avatars
-            // This will be called when social data is loaded
-            break
-            
         case 3: // Discovery
-            // Preload popular habit images and user avatars
             await preloadDiscoveryImages()
-            break
-            
-        case 4: // Profile
-            // Preload user avatar and habit captures
-            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
-                imagePreloader.preloadImageSync(url: avatar)
-            }
-            imagePreloader.preloadHabitCaptures(habitManager.captures)
-            
-        default:
+        default: // The feed preloads its own images once its data has loaded
             break
         }
     }
@@ -279,7 +245,6 @@ struct MainTabView: View {
         
         // Only preload if it's been more than 30 seconds since last preload
         guard now.timeIntervalSince(lastPreloadTime) > 30 else {
-            print("🖼️ Skipping preload - too soon since last preload")
             return
         }
         
@@ -309,9 +274,6 @@ struct MainTabView: View {
 
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
-    @StateObject private var imagePreloader = ImagePreloader.shared
-    @EnvironmentObject var habitManager: HabitManager
-    @EnvironmentObject var authManager: AuthManager
     
     private let tabs = [
         TabItem(icon: "house", title: "Home", tag: 0, gradient: [Color.blue, Color.purple], isSpecial: false),
@@ -355,18 +317,10 @@ struct TabButtonView: View {
     let tab: TabItem
     let isSelected: Bool
     let onTap: () -> Void
-    @StateObject private var imagePreloader = ImagePreloader.shared
-    @EnvironmentObject var habitManager: HabitManager
-    @EnvironmentObject var authManager: AuthManager
     
     var body: some View {
-        Button(action: {
-            // Preload images for the tab being tapped
-            Task {
-                await preloadImagesForTab(tab.tag)
-            }
-            onTap()
-        }) {
+        // Image preloading for the new tab is handled by MainTabView when the selection changes
+        Button(action: onTap) {
             VStack(spacing: 0) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 20, weight: .medium))
@@ -391,65 +345,7 @@ struct TabButtonView: View {
         .buttonStyle(PlainButtonStyle())
         .frame(minWidth: 0, maxWidth: .infinity)
     }
-    
-    private func preloadImagesForTab(_ tab: Int) async {
-        switch tab {
-        case 0: // Dashboard
-            // Preload habit captures and user avatars
-            imagePreloader.preloadHabitCaptures(habitManager.captures)
-            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
-                imagePreloader.preloadImageSync(url: avatar)
-            }
-            
-        case 1: // Social Feed
-            // Preload social feed images and user avatars
-            // This will be called when social data is loaded
-            break
-            
-        case 3: // Discovery
-            // Preload popular habit images and user avatars
-            await preloadDiscoveryImages()
-            break
-            
-        case 4: // Profile
-            // Preload user avatar and habit captures
-            if let currentUser = authManager.currentUser, let avatar = currentUser.avatar {
-                imagePreloader.preloadImageSync(url: avatar)
-            }
-            imagePreloader.preloadHabitCaptures(habitManager.captures)
-            
-        default:
-            break
-        }
-    }
-    
-    private func preloadDiscoveryImages() async {
-        // Load all app data at startup if not already loaded
-        if habitManager.habits.isEmpty {
-            await habitManager.loadAppData()
-        }
-        
-        // Preload trending thumbnails with caching
-        let trendingURLs = habitManager.trendingCaptures.compactMap { $0.imageUrl }
-        if !trendingURLs.isEmpty {
-            imagePreloader.preloadTrendingThumbnails(for: trendingURLs, size: CGSize(width: 64, height: 64))
-        }
-        
-        // Preload popular habit capture images (only if not already preloaded)
-        let popularCaptures = habitManager.popularHabits.compactMap { habit in
-            habit.captures
-        }.flatMap { $0 }
-        if !popularCaptures.isEmpty {
-            imagePreloader.preloadImages(for: popularCaptures)
-        }
-        
-        // Load and preload user avatars
-        let allUsers = await habitManager.getAllUsers()
-        imagePreloader.preloadUserAvatars(for: allUsers)
-    }
 }
-
-
 
 #Preview {
     ContentView()

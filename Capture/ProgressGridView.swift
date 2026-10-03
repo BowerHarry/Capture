@@ -81,7 +81,7 @@ struct ProgressGridView: View {
             RoundedRectangle(cornerRadius: 20)
                 .stroke(Color(.systemGray5), lineWidth: 1)
         )
-        .onChange(of: habitManager.habitCategories.count) { _ in
+        .onChange(of: habitManager.habitCategories.count) { _, _ in
             refreshTrigger.toggle()
         }
         .onAppear {

@@ -87,7 +87,6 @@ struct SocialFeedView: View {
             // Try cache first
             if let cachedGroups = AppCacheManager.shared.getCachedSocialFeedGroups() {
                 allPosts = cachedGroups
-                print("📱 Loaded social feed from cache")
                 await loadPostsIncrementally(from: cachedGroups)
             } else {
                 // Load from network
@@ -96,7 +95,7 @@ struct SocialFeedView: View {
                 await loadPostsIncrementally(from: allPosts)
             }
         } catch {
-            print("Error loading social feed: \(error)")
+            Log.error("Error loading social feed: \(error)")
         }
         isLoading = false
     }
@@ -107,7 +106,6 @@ struct SocialFeedView: View {
         // Load first post immediately
         feedGroups = [posts[0]]
         loadedPostCount = 1
-        print("📱 Loaded first post immediately")
         
         // Preload images for first post with high priority
         if let firstPost = posts.first {
@@ -121,13 +119,11 @@ struct SocialFeedView: View {
             
             feedGroups.append(posts[i])
             loadedPostCount = i + 1
-            print("📱 Loaded post \(i + 1) of \(posts.count)")
             
             // Preload images for this post
             await imagePreloader.preloadImagesBatch(urls: getImageURLs(from: [posts[i]]), priority: .normal)
         }
         
-        print("📱 Finished loading all \(posts.count) posts")
     }
     
     private func getImageURLs(from groups: [SocialFeedGroup]) -> [String] {
@@ -160,7 +156,6 @@ struct SocialFeedView: View {
     private func handleReactionToggle(for captureId: UUID) async {
         do {
             let result = try await SupabaseManager.shared.toggleCaptureReaction(captureId: captureId)
-            print("Reaction toggle result: isLiked=\(result.isLiked), count=\(result.reactionCount)")
             
             // Update the local state - find the group that contains this capture
             for groupIndex in feedGroups.indices {
@@ -186,7 +181,7 @@ struct SocialFeedView: View {
                 }
             }
         } catch {
-            print("Error toggling reaction: \(error)")
+            Log.error("Error toggling reaction: \(error)")
         }
     }
     
@@ -227,9 +222,7 @@ struct SocialFeedTabView: View {
                             group: group,
                             selectedCaptureId: selectedCaptures[group.id],
                             onCaptureSelect: { captureId in
-                                print("🔄 Tapping thumbnail: group.id=\(group.id), captureId=\(captureId)")
                                 selectedCaptures[group.id] = captureId
-                                print("🔄 Updated selectedCaptures: \(selectedCaptures)")
                             },
                             onReactionToggle: onReactionToggle,
                             onCommentTap: onCommentTap
@@ -264,16 +257,12 @@ struct SocialFeedGroupCard: View {
     @State private var viewUpdateTrigger = 0
     
     private var selectedCapture: SocialFeedCapture {
-        print("🔍 selectedCapture computed: selectedCaptureId=\(String(describing: selectedCaptureId)), group.id=\(group.id)")
         
         if let selectedId = selectedCaptureId,
            let capture = group.recentCaptures?.first(where: { $0.id == selectedId }) {
-            print("🔍 Found selected capture: \(capture.id)")
-            print("🔍 Selected capture imageUrl: \(capture.imageUrl ?? "nil")")
             return capture
         }
         
-        print("🔍 Using fallback capture")
         // If no recent captures or no selection, use the last capture data from the group
         let fallbackCapture = SocialFeedCapture(
             id: group.lastCaptureId,
@@ -287,7 +276,6 @@ struct SocialFeedGroupCard: View {
         )
         
         let result = group.recentCaptures?.first ?? fallbackCapture
-        print("🔍 Final selectedCapture imageUrl: \(result.imageUrl ?? "nil")")
         return result
     }
     
@@ -313,26 +301,11 @@ struct SocialFeedGroupCard: View {
                         )
                 }
                 .id(viewUpdateTrigger) // Force view update when selection changes
-                .onAppear {
-                    print("🖼️ Main image onAppear - URL: \(selectedCapture.imageUrl ?? "nil")")
-                }
-                .onChange(of: selectedCaptureId) { _ in
+                .onChange(of: selectedCaptureId) { _, _ in
                     viewUpdateTrigger += 1
-                    print("🔄 View update triggered for selection change")
                 }
                 .frame(height: 400) // 9:16 aspect ratio
                 .clipped()
-                
-                // Category Badge - Top Right
-                VStack {
-                    HStack {
-                        Spacer()
-                        SocialFeedCategoryBadge(category: group.habitCategory, color: group.habitCategoryColor)
-                            .padding(.top, 12)
-                            .padding(.trailing, 12)
-                    }
-                    Spacer()
-                }
                 
                 // Overlaid Header Information
                 VStack {
@@ -459,6 +432,8 @@ struct SocialFeedGroupCard: View {
                     Text(group.habitName)
                         .font(.headline)
                         .fontWeight(.semibold)
+                    
+                    SocialFeedCategoryBadge(category: group.habitCategory, color: group.habitCategoryColor)
                     
                     Spacer()
                     
@@ -678,7 +653,7 @@ struct CaptureCommentsView: View {
         do {
             comments = try await SupabaseManager.shared.getCaptureComments(captureId: capture.id)
         } catch {
-            print("Error loading comments: \(error)")
+            Log.error("Error loading comments: \(error)")
         }
         isLoading = false
     }
@@ -689,7 +664,7 @@ struct CaptureCommentsView: View {
             newComment = ""
             await loadComments()
         } catch {
-            print("Error adding comment: \(error)")
+            Log.error("Error adding comment: \(error)")
         }
     }
 }
