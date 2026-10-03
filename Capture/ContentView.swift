@@ -113,7 +113,11 @@ extension ContentView {
 }
 
 struct MainTabView: View {
+    #if DEBUG
+    @State private var selectedTab = DemoMode.initialTab
+    #else
     @State private var selectedTab = 0
+    #endif
     @State private var selectedHabitId: UUID?
     @State private var showingDebugPanel = false
     @State private var isKeyboardVisible = false

@@ -90,6 +90,9 @@ class HabitManager: ObservableObject {
     // MARK: - Best Streak Management
     
     func updateUserBestStreak() async {
+        #if DEBUG
+        if DemoMode.isEnabled { return }
+        #endif
         // Prevent duplicate calls
         if isUpdatingBestStreak {
             NSLog("[HabitManager] updateUserBestStreak: already updating, skipping")
@@ -941,6 +944,9 @@ class HabitManager: ObservableObject {
     }
     
     func getAllHabits() async -> [AvailableHabit] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.availableHabits }
+        #endif
         do {
             let response: [AvailableHabit] = try await supabaseClient.client
                 .from("available_habits")
@@ -958,6 +964,9 @@ class HabitManager: ObservableObject {
     }
     
     func getAllUsers() async -> [User] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.users }
+        #endif
         do {
             let response: [UserProfile] = try await supabaseClient.client
                 .from("profiles")

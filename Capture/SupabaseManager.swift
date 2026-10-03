@@ -51,6 +51,9 @@ class SupabaseManager {
     }
     
     func getCurrentUser() async throws -> User? {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.currentUser }
+        #endif
         do {
             let _ = try await client.auth.session
             return try await fetchCurrentProfile()
@@ -185,6 +188,9 @@ class SupabaseManager {
     
     // MARK: - Habits (production)
     func getHabits() async throws -> [Habit] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.habits }
+        #endif
         guard let currentUser = try await getCurrentUser() else {
             throw NSError(domain: "AuthError", code: 0, userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
@@ -602,6 +608,9 @@ class SupabaseManager {
     
     // MARK: - Captures fetch
     func getCapturesSince(since: Date) async throws -> [HabitCapture] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.captures.filter { $0.createdAt >= since } }
+        #endif
         let session = try await client.auth.session
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -646,6 +655,9 @@ class SupabaseManager {
     
     // MARK: - Optimized Progress Grid Query
     func getProgressGridData(since: Date) async throws -> (habits: [Habit], captures: [HabitCapture]) {
+        #if DEBUG
+        if DemoMode.isEnabled { return (DemoData.habits, DemoData.captures.filter { $0.createdAt >= since }) }
+        #endif
         NSLog("[SupabaseManager] getProgressGridData: starting optimized fetch for progress grid data since %@", since.description)
         
         let session = try await client.auth.session
@@ -747,6 +759,9 @@ class SupabaseManager {
     
     // MARK: - Optimized Database Function Query
     func getProgressGridDataOptimized(since: Date) async throws -> (habits: [Habit], captures: [HabitCapture]) {
+        #if DEBUG
+        if DemoMode.isEnabled { return (DemoData.habits, DemoData.captures.filter { $0.createdAt >= since }) }
+        #endif
         let session = try await client.auth.session
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -952,6 +967,9 @@ class SupabaseManager {
     
     // MARK: - Available Habits (Suggestions)
     func getAvailableHabits() async throws -> [AvailableHabit] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.availableHabits }
+        #endif
         let rows: [AvailableHabit] = try await client.database
             .from("available_habits")
             .select()
@@ -964,6 +982,9 @@ class SupabaseManager {
     
     // MARK: - Discovery Methods
     func getTrendingHabits() async throws -> [TrendingHabit] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.trendingHabits }
+        #endif
         NSLog("[SupabaseManager] getTrendingHabits: fetching trending habits from trending_habits_view")
         
         do {
@@ -1156,6 +1177,9 @@ class SupabaseManager {
     
     // MARK: - Trending Captures
     func getTrendingCapturesForHabits() async throws -> [TrendingCapture] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.trendingCaptures }
+        #endif
         NSLog("[SupabaseManager] getTrendingCapturesForHabits: fetching trending captures from RPC function")
         
         do {
@@ -1848,6 +1872,9 @@ struct AnyEncodable: Encodable {
     // MARK: - Habit Categories
     
     func getHabitCategories() async throws -> [DatabaseHabitCategory] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.categories }
+        #endif
         NSLog("[SupabaseManager] getHabitCategories: fetching habit categories from database")
         
         do {
@@ -1865,6 +1892,9 @@ struct AnyEncodable: Encodable {
     }
     
     func getTrendingHabitsByCategoryId(_ categoryId: UUID) async throws -> [TrendingHabit] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.trendingHabits(inCategory: categoryId) }
+        #endif
         NSLog("[SupabaseManager] getTrendingHabitsByCategoryId: fetching trending habits for category ID '%@'", categoryId.uuidString)
         
         do {
@@ -1882,6 +1912,9 @@ struct AnyEncodable: Encodable {
     }
     
     func getCommunityStats() async throws -> CommunityStats {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.communityStats }
+        #endif
         NSLog("[SupabaseManager] getCommunityStats: fetching community stats from database")
         
         do {
@@ -1906,6 +1939,9 @@ struct AnyEncodable: Encodable {
     // MARK: - Social Feed Functions
     
     func getSocialFeedGroups(limit: Int = 10, offset: Int = 0) async throws -> [SocialFeedGroup] {
+        #if DEBUG
+        if DemoMode.isEnabled { return DemoData.socialFeedGroups }
+        #endif
         NSLog("[SupabaseManager] getSocialFeedGroups: fetching social feed groups with limit=%d, offset=%d", limit, offset)
         
         // Temporarily use fallback function until optimized function parameter types are fixed
@@ -1992,6 +2028,9 @@ struct AnyEncodable: Encodable {
     }
     
     func getCaptureComments(captureId: UUID) async throws -> [CaptureComment] {
+        #if DEBUG
+        if DemoMode.isEnabled { return [] }
+        #endif
         NSLog("[SupabaseManager] getCaptureComments: fetching comments for capture ID '%@'", captureId.uuidString)
         
         do {

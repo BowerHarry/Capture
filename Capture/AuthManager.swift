@@ -103,6 +103,9 @@ class AuthManager: ObservableObject {
     }
     
     func refreshFollowerCounts() async {
+        #if DEBUG
+        if DemoMode.isEnabled { return }
+        #endif
         guard let currentUser = currentUser else { 
             print("❌ No current user to refresh follower counts")
             return 
@@ -151,6 +154,9 @@ class AuthManager: ObservableObject {
     }
     
     func refreshFollowerCountsForUser(userId: UUID) async {
+        #if DEBUG
+        if DemoMode.isEnabled { return }
+        #endif
         print("🔄 Refreshing follower counts for specific user: \(userId)")
         
         do {
