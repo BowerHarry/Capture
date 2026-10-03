@@ -136,41 +136,6 @@ struct AvailableHabit: Identifiable, Codable {
     }
 }
 
-struct Capture: Identifiable, Codable {
-    let id: UUID
-    let habitId: UUID
-    let userId: UUID
-    let imageUrl: String?
-    let note: String?
-    let createdAt: Date
-    let updatedAt: Date
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case habitId = "habit_id"
-        case userId = "user_id"
-        case imageUrl = "image_url"
-        case note
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
-    
-    init(id: UUID = UUID(), habitId: UUID, userId: UUID, imageUrl: String? = nil, note: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id
-        self.habitId = habitId
-        self.userId = userId
-        self.imageUrl = imageUrl
-        self.note = note
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-    
-    // Computed property for backward compatibility with decoupled schema
-    var userHabitId: UUID {
-        return habitId
-    }
-}
-
 // MARK: - User Models
 
 struct User: Identifiable, Codable {
@@ -245,65 +210,6 @@ struct UserProfile: Identifiable, Codable {
     }
 }
 
-// MARK: - Social Models
-
-struct SocialPost: Identifiable, Codable {
-    let id: UUID
-    let userId: UUID
-    let habitId: UUID?
-    let captureId: UUID?
-    let content: String
-    let imageUrl: String?
-    let likes: Int
-    let comments: Int
-    let createdAt: Date
-    let updatedAt: Date
-    
-    init(id: UUID = UUID(), userId: UUID, habitId: UUID? = nil, captureId: UUID? = nil, content: String, imageUrl: String? = nil, likes: Int = 0, comments: Int = 0, createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id
-        self.userId = userId
-        self.habitId = habitId
-        self.captureId = captureId
-        self.content = content
-        self.imageUrl = imageUrl
-        self.likes = likes
-        self.comments = comments
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-}
-
-struct Comment: Identifiable, Codable {
-    let id: UUID
-    let postId: UUID
-    let userId: UUID
-    let content: String
-    let createdAt: Date
-    let updatedAt: Date
-    
-    init(id: UUID = UUID(), postId: UUID, userId: UUID, content: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id
-        self.postId = postId
-        self.userId = userId
-        self.content = content
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-}
-
-struct Like: Identifiable, Codable {
-    let id: UUID
-    let postId: UUID
-    let userId: UUID
-    let createdAt: Date
-    
-    init(id: UUID = UUID(), postId: UUID, userId: UUID, createdAt: Date = Date()) {
-        self.id = id
-        self.postId = postId
-        self.userId = userId
-        self.createdAt = createdAt
-    }
-}
 
 // MARK: - Follow Models
 
@@ -330,56 +236,6 @@ struct Follow: Identifiable, Codable {
 
 // MARK: - Enums
 
-enum HabitCategory: String, CaseIterable, Codable {
-    case health = "Health"
-    case fitness = "Fitness"
-    case productivity = "Productivity"
-    case learning = "Learning"
-    case mindfulness = "Mindfulness"
-    case creativity = "Creativity"
-    case social = "Social"
-    case finance = "Finance"
-    case other = "Other"
-    
-    var icon: String {
-        switch self {
-        case .health: return "❤️"
-        case .fitness: return "💪"
-        case .productivity: return "⚡"
-        case .learning: return "📚"
-        case .mindfulness: return "🧘"
-        case .creativity: return "🎨"
-        case .social: return "👥"
-        case .finance: return "💰"
-        case .other: return "⭐"
-        }
-    }
-}
-
-enum HabitColor: String, CaseIterable, Codable {
-    case red = "red"
-    case orange = "orange"
-    case blue = "blue"
-    case green = "green"
-    case purple = "purple"
-    case pink = "pink"
-    case cyan = "cyan"
-    case gray = "gray"
-    
-    var color: Color {
-        switch self {
-        case .red: return .red
-        case .orange: return .orange
-        case .blue: return .blue
-        case .green: return .green
-        case .purple: return .purple
-        case .pink: return .pink
-        case .cyan: return .cyan
-        case .gray: return .gray
-        }
-    }
-}
-
 enum TargetFrequency: String, CaseIterable, Codable {
     case daily = "daily"
     case weekly = "weekly"
@@ -392,28 +248,6 @@ enum TargetFrequency: String, CaseIterable, Codable {
         case .monthly: return "Monthly"
         }
     }
-}
-
-// MARK: - API Models
-
-struct APIResponse<T: Codable>: Codable {
-    let success: Bool?
-    let data: T?
-    let error: String?
-}
-
-struct CreateHabitRequest: Codable {
-    let name: String
-    let description: String?
-    let category: String
-    let targetFrequency: String
-}
-
-struct CreateCaptureRequest: Codable {
-    let habitId: String
-    let caption: String?
-    let isPublic: Bool
-    let imageData: Data?
 }
 
 // MARK: - Capture Models
@@ -484,50 +318,11 @@ struct HabitCapture: Identifiable, Codable {
         }
         // If both are nil, we need to get it from user_habits table using habit_template_id
         // For now, return a default UUID to prevent crashes, but this indicates a data issue
-        NSLog("[HabitCapture] userHabitIdForStreak: WARNING - both userHabitId and habitId are nil, this indicates a database migration issue")
+        Log.error("[HabitCapture] userHabitIdForStreak: WARNING - both userHabitId and habitId are nil, this indicates a database migration issue")
         return UUID() // This will cause streak calculation to fail, but prevents crashes
     }
 }
 
-// MARK: - View Models
-
-struct HabitStats {
-    let totalHabits: Int
-    let activeHabits: Int
-    let totalCaptures: Int
-    let currentStreak: Int
-    let longestStreak: Int
-    let completionRate: Double
-    
-    init(totalHabits: Int = 0, activeHabits: Int = 0, totalCaptures: Int = 0, currentStreak: Int = 0, longestStreak: Int = 0, completionRate: Double = 0.0) {
-        self.totalHabits = totalHabits
-        self.activeHabits = activeHabits
-        self.totalCaptures = totalCaptures
-        self.currentStreak = currentStreak
-        self.longestStreak = longestStreak
-        self.completionRate = completionRate
-    }
-}
-
-struct SocialFeedItem: Identifiable {
-    let id: UUID
-    let post: SocialPost
-    let user: User
-    let habit: Habit?
-    let capture: Capture?
-    let isLiked: Bool
-    let isFollowing: Bool
-    
-    init(id: UUID = UUID(), post: SocialPost, user: User, habit: Habit? = nil, capture: Capture? = nil, isLiked: Bool = false, isFollowing: Bool = false) {
-        self.id = id
-        self.post = post
-        self.user = user
-        self.habit = habit
-        self.capture = capture
-        self.isLiked = isLiked
-        self.isFollowing = isFollowing
-    }
-}
 
 // MARK: - Discovery Models
 
@@ -665,82 +460,6 @@ struct DiscoveryHabitCategory: Identifiable, Codable {
         self.description = description
         self.icon = icon
         self.sortOrder = sortOrder
-    }
-}
-
-struct CaptureLike: Identifiable, Codable {
-    let id: UUID
-    let captureId: UUID
-    let userId: UUID
-    let createdAt: Date
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case captureId = "capture_id"
-        case userId = "user_id"
-        case createdAt = "created_at"
-    }
-}
-
-struct CaptureLikeCount: Identifiable, Codable {
-    let captureId: UUID
-    let habitId: UUID
-    let captureUserId: UUID
-    let imageUrl: String?
-    let caption: String?
-    let captureCreatedAt: Date
-    let likeCount: Int
-    let likedByUserIds: [UUID]
-    
-    var id: UUID { captureId }
-    
-    enum CodingKeys: String, CodingKey {
-        case captureId = "capture_id"
-        case habitId = "habit_id"
-        case captureUserId = "capture_user_id"
-        case imageUrl = "image_url"
-        case caption
-        case captureCreatedAt = "capture_created_at"
-        case likeCount
-        case likedByUserIds
-    }
-}
-
-struct SocialFeedPost: Identifiable, Codable {
-    let captureId: UUID
-    let habitId: UUID?           // Keep for backward compatibility
-    let habitTemplateId: UUID?   // NEW: For trending and discovery
-    let captureUserId: UUID
-    let imageUrl: String?
-    let caption: String?
-    let isPublic: Bool
-    let captureCreatedAt: Date
-    let habitName: String
-    let habitCategory: String
-    let userDisplayName: String?
-    let userAvatarUrl: String?
-    let likeCount: Int
-    let likedByUserIds: [UUID]
-    let isLikedByCurrentUser: Bool
-    
-    var id: UUID { captureId }
-    
-    enum CodingKeys: String, CodingKey {
-        case captureId = "capture_id"
-        case habitId = "habit_id"
-        case habitTemplateId = "habit_template_id"  // NEW
-        case captureUserId = "capture_user_id"
-        case imageUrl = "image_url"
-        case caption
-        case isPublic = "is_public"
-        case captureCreatedAt = "capture_created_at"
-        case habitName = "habit_name"
-        case habitCategory = "habit_category"
-        case userDisplayName = "user_display_name"
-        case userAvatarUrl = "user_avatar_url"
-        case likeCount
-        case likedByUserIds
-        case isLikedByCurrentUser
     }
 }
 
@@ -1038,13 +757,3 @@ struct HabitProgressData: Codable {
     let habit_template_id: UUID
 }
 
-struct CaptureMetadataData: Codable {
-    let capture_id: UUID
-    let user_habit_id: UUID
-    let image_url: String?
-    let caption: String?
-    let created_at: Date
-    let is_public: Bool
-    let habit_name: String
-    let habit_category: String
-}
