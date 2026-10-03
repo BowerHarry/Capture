@@ -86,8 +86,8 @@ struct CameraCaptureView: View {
             .sheet(isPresented: $showingImagePicker) {
                 ImagePickerCropper(selectedImage: $capturedImage)
             }
-            .onChange(of: capturedImage) { image in
-                if let image = image {
+            .onChange(of: capturedImage) { _, image in
+                if image != nil {
                     showingCapturedImage = true
                 }
             }
@@ -113,7 +113,7 @@ struct CameraCaptureView: View {
     
     private func capturePhoto() {
         guard let habitIdString = preselectedHabitId,
-              let habitId = UUID(uuidString: habitIdString) else { return }
+              UUID(uuidString: habitIdString) != nil else { return }
         
         cameraManager.capturePhoto { image in
             if let image = image {
@@ -127,12 +127,10 @@ struct CameraCaptureView: View {
         guard let habitIdString = preselectedHabitId,
               let habitId = UUID(uuidString: habitIdString),
               let data = image.jpegData(compressionQuality: 0.85) else { 
-            NSLog("[CameraCaptureView] saveImage: ERROR - Failed to prepare image data or habitId")
+            Log.error("[CameraCaptureView] saveImage: ERROR - Failed to prepare image data or habitId")
             return 
         }
         
-        NSLog("[CameraCaptureView] saveImage: starting capture save for habitId=%@", habitId.uuidString)
-        NSLog("[CameraCaptureView] saveImage: image data size=%d bytes, isPublic=%@", data.count, String(isPublic))
         
         isSaving = true
         defer { isSaving = false }
@@ -145,10 +143,9 @@ struct CameraCaptureView: View {
         )
         
         if habitManager.errorMessage == nil {
-            NSLog("[CameraCaptureView] saveImage: capture saved successfully")
             onBack()
         } else {
-            NSLog("[CameraCaptureView] saveImage: ERROR - %@", habitManager.errorMessage ?? "Unknown error")
+            Log.error(String(format: "[CameraCaptureView] saveImage: ERROR - %@", habitManager.errorMessage ?? "Unknown error"))
         }
     }
 }
@@ -241,8 +238,8 @@ private struct LiveCameraPreview: UIViewRepresentable {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        if let connection = view.videoPreviewLayer.connection, connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
+        if let connection = view.videoPreviewLayer.connection, connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
         }
         return view
     }
@@ -252,8 +249,8 @@ private struct LiveCameraPreview: UIViewRepresentable {
             uiView.videoPreviewLayer.session = session
         }
         uiView.videoPreviewLayer.videoGravity = .resizeAspectFill
-        if let connection = uiView.videoPreviewLayer.connection, connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
+        if let connection = uiView.videoPreviewLayer.connection, connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
         }
     }
     

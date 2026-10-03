@@ -2,31 +2,26 @@ import Foundation
 import AVFoundation
 import UIKit
 
-@MainActor
-class CameraManager: NSObject, ObservableObject {
+/// Owns the capture session. All session configuration and start/stop calls run on
+/// `sessionQueue`; photo results are delivered back on the main queue.
+final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     let session = AVCaptureSession()
-    let previewLayer = AVCaptureVideoPreviewLayer()
     private let photoOutput = AVCapturePhotoOutput()
-    private var captureCompletion: ((UIImage?) -> Void)?
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
+    // Only touched on sessionQueue
     private var isConfigured = false
+    // Only touched on the main queue
+    private var captureCompletion: ((UIImage?) -> Void)?
     
     override init() {
         super.init()
-        previewLayer.session = session
-        previewLayer.videoGravity = .resizeAspectFill
-        addLifecycleObservers()
-    }
-    
-    private func addLifecycleObservers() {
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
     }
     
     @objc private func appDidBecomeActive() {
         sessionQueue.async {
-            if !self.session.isRunning && self.isConfigured {
-                NSLog("[Camera] App active: starting session")
+            if self.isConfigured && !self.session.isRunning {
                 self.session.startRunning()
             }
         }
@@ -35,103 +30,91 @@ class CameraManager: NSObject, ObservableObject {
     @objc private func appWillResignActive() {
         sessionQueue.async {
             if self.session.isRunning {
-                NSLog("[Camera] App inactive: stopping session")
                 self.session.stopRunning()
             }
         }
     }
     
     func ensureSessionRunning() async {
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        switch status {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            setupCameraIfNeeded()
+            startSession()
         case .notDetermined:
-            let granted = await AVCaptureDevice.requestAccess(for: .video)
-            if granted { setupCameraIfNeeded() }
-            else { NSLog("[Camera] Permission denied") }
-        default:
-            NSLog("[Camera] Permission not authorized: %@", String(describing: status))
-        }
-    }
-    
-    private func setupCameraIfNeeded() {
-        if isConfigured {
-            sessionQueue.async {
-                if !self.session.isRunning {
-                    NSLog("[Camera] Already configured; starting session")
-                    self.session.startRunning()
-                }
-            }
-            return
-        }
-        setupCamera()
-    }
-    
-    private func setupCamera() {
-        sessionQueue.async {
-            self.session.beginConfiguration()
-            self.session.sessionPreset = .photo
-            
-            // Clean inputs
-            for input in self.session.inputs { self.session.removeInput(input) }
-            
-            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-                NSLog("[Camera] No back camera device available")
-                self.session.commitConfiguration()
-                return
-            }
-            do {
-                let input = try AVCaptureDeviceInput(device: device)
-                if self.session.canAddInput(input) {
-                    self.session.addInput(input)
-                } else {
-                    NSLog("[Camera] Cannot add camera input")
-                }
-            } catch {
-                NSLog("[Camera] Failed to create device input: %@", error.localizedDescription)
-            }
-            
-            if self.session.canAddOutput(self.photoOutput) {
-                self.session.addOutput(self.photoOutput)
-                self.photoOutput.isHighResolutionCaptureEnabled = true
+            if await AVCaptureDevice.requestAccess(for: .video) {
+                startSession()
             } else {
-                NSLog("[Camera] Cannot add photo output")
+                Log.error("[Camera] Permission denied")
             }
-            
-            self.session.commitConfiguration()
-            self.isConfigured = true
-            if !self.session.isRunning {
-                NSLog("[Camera] Starting session")
+        default:
+            break
+        }
+    }
+    
+    private func startSession() {
+        sessionQueue.async {
+            if !self.isConfigured {
+                self.configureSession()
+            }
+            if self.isConfigured && !self.session.isRunning {
                 self.session.startRunning()
             }
         }
     }
     
-    func capturePhoto(completion: @escaping (UIImage?) -> Void) {
-        self.captureCompletion = completion
-        let settings = AVCapturePhotoSettings()
-        settings.isHighResolutionPhotoEnabled = true
-        photoOutput.capturePhoto(with: settings, delegate: self)
+    /// Must be called on `sessionQueue`.
+    private func configureSession() {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        session.sessionPreset = .photo
+        
+        for input in session.inputs { session.removeInput(input) }
+        
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+            return
+        }
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            if session.canAddInput(input) {
+                session.addInput(input)
+            }
+        } catch {
+            Log.error("[Camera] Failed to create device input: \(error.localizedDescription)")
+            return
+        }
+        
+        if session.canAddOutput(photoOutput) {
+            session.addOutput(photoOutput)
+            let largest = device.activeFormat.supportedMaxPhotoDimensions.max { $0.width * $0.height < $1.width * $1.height }
+            if let largest {
+                photoOutput.maxPhotoDimensions = largest
+            }
+        }
+        
+        isConfigured = true
     }
     
-    func switchCamera() {
-        // Implementation for switching between front and back camera
+    /// Call from the main queue. `completion` is called on the main queue.
+    func capturePhoto(completion: @escaping (UIImage?) -> Void) {
+        captureCompletion = completion
+        sessionQueue.async {
+            let settings = AVCapturePhotoSettings()
+            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+            self.photoOutput.capturePhoto(with: settings, delegate: self)
+        }
     }
 }
 
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error = error {
-            NSLog("[Camera] Photo capture error: %@", error.localizedDescription)
-            captureCompletion?(nil)
-            return
+        var image: UIImage?
+        if let error {
+            Log.error("[Camera] Photo capture error: \(error.localizedDescription)")
+        } else if let data = photo.fileDataRepresentation() {
+            image = UIImage(data: data)
         }
-        guard let data = photo.fileDataRepresentation(), let image = UIImage(data: data) else {
-            NSLog("[Camera] No image data from capture")
-            captureCompletion?(nil)
-            return
+        DispatchQueue.main.async {
+            self.captureCompletion?(image)
+            self.captureCompletion = nil
         }
-        captureCompletion?(image)
     }
 }
